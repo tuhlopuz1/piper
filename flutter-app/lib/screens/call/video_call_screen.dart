@@ -57,32 +57,20 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             top: MediaQuery.of(context).padding.top + 8,
             left: 12,
             right: 12,
-            child: Row(
+            child: Column(
               children: [
-                IconButton(
-                  icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 28),
-                  color: Colors.white,
-                  onPressed: () => Navigator.pop(context),
+                Text(
+                  widget.chat.name,
+                  style: GoogleFonts.inter(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
                 ),
-                const Spacer(),
-                Column(
-                  children: [
-                    Text(
-                      widget.chat.name,
-                      style: GoogleFonts.inter(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
-                    Text(
-                      'Видеозвонок',
-                      style: GoogleFonts.inter(fontSize: 12, color: Colors.white70),
-                    ),
-                  ],
+                Text(
+                  'Видеозвонок',
+                  style: GoogleFonts.inter(fontSize: 12, color: Colors.white70),
                 ),
-                const Spacer(),
-                const SizedBox(width: 48),
               ],
             ),
           ),

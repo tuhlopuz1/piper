@@ -46,16 +46,8 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 28),
-                      color: AppColors.foreground,
-                      onPressed: () {
-                        CallManager.instance.startCall(widget.chat);
-                        Navigator.pop(context);
-                      },
-                    ),
-                    const Spacer(),
                     Text(
                       'Голосовой звонок',
                       style: GoogleFonts.inter(
@@ -64,8 +56,6 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
                         color: AppColors.mutedForeground,
                       ),
                     ),
-                    const Spacer(),
-                    const SizedBox(width: 48),
                   ],
                 ),
               ),

@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
 import '../../services/call_manager.dart';
+import '../../services/theme_notifier.dart';
 import '../../widgets/app_avatar.dart';
 import '../call/voice_call_screen.dart';
 import 'tabs/chats_tab.dart';
@@ -19,8 +20,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _index = 0;
 
-  static final _tabs = [const ChatsTab(), const ContactsTab(), const SettingsTab()];
-
   static const _items = [
     (Icons.chat_bubble_outline_rounded, Icons.chat_bubble_rounded,    'Чаты'),
     (Icons.people_outline_rounded,      Icons.people_rounded,          'Контакты'),
@@ -28,28 +27,49 @@ class _HomeScreenState extends State<HomeScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    ThemeNotifier.instance.mode.addListener(_onTheme);
+  }
+
+  @override
+  void dispose() {
+    ThemeNotifier.instance.mode.removeListener(_onTheme);
+    super.dispose();
+  }
+
+  void _onTheme() => setState(() {});
+
+  void _setIndex(int i) => setState(() => _index = i);
+
+  Widget _currentTab() {
+    switch (_index) {
+      case 0: return ChatsTab();
+      case 1: return ContactsTab();
+      default: return SettingsTab();
+    }
+  }
+
+  Widget _body() => AnimatedSwitcher(
+        duration: const Duration(milliseconds: 240),
+        switchInCurve: Curves.easeOutCubic,
+        child: KeyedSubtree(key: ValueKey(_index), child: _currentTab()),
+      );
+
+  @override
   Widget build(BuildContext context) {
     final w = MediaQuery.sizeOf(context).width;
+    final body = _body();
 
     return ValueListenableBuilder<Chat?>(
       valueListenable: CallManager.instance.activeCall,
       builder: (context, activeCall, _) {
-        if (w >= 900) return _DesktopLayout(index: _index, onTap: _setIndex, activeCall: activeCall);
-        if (w >= 600) return _TabletLayout(index: _index, onTap: _setIndex, activeCall: activeCall);
-        return _MobileLayout(index: _index, onTap: _setIndex, activeCall: activeCall);
+        if (w >= 900) return _DesktopLayout(index: _index, onTap: _setIndex, activeCall: activeCall, body: body);
+        if (w >= 600) return _TabletLayout(index: _index, onTap: _setIndex, activeCall: activeCall, body: body);
+        return _MobileLayout(index: _index, onTap: _setIndex, activeCall: activeCall, body: body);
       },
     );
   }
-
-  void _setIndex(int i) => setState(() => _index = i);
-
-  // ── shared body ────────────────────────────────────────────────────────────
-  static Widget _body(int index) => AnimatedSwitcher(
-        duration: const Duration(milliseconds: 240),
-        switchInCurve: Curves.easeOutCubic,
-        child: KeyedSubtree(key: ValueKey(index), child: _tabs[index]),
-      );
-
 }
 
 // ─── Mobile layout ────────────────────────────────────────────────────────────
@@ -58,8 +78,9 @@ class _MobileLayout extends StatelessWidget {
   final int index;
   final ValueChanged<int> onTap;
   final Chat? activeCall;
+  final Widget body;
 
-  const _MobileLayout({required this.index, required this.onTap, this.activeCall});
+  const _MobileLayout({required this.index, required this.onTap, this.activeCall, required this.body});
 
   static const _items = _HomeScreenState._items;
 
@@ -123,7 +144,7 @@ class _MobileLayout extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _HomeScreenState._body(index),
+      body: body,
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -141,8 +162,9 @@ class _TabletLayout extends StatelessWidget {
   final int index;
   final ValueChanged<int> onTap;
   final Chat? activeCall;
+  final Widget body;
 
-  const _TabletLayout({required this.index, required this.onTap, this.activeCall});
+  const _TabletLayout({required this.index, required this.onTap, this.activeCall, required this.body});
 
   static const _items = _HomeScreenState._items;
 
@@ -173,7 +195,7 @@ class _TabletLayout extends StatelessWidget {
                   }).toList(),
                 ),
                 const VerticalDivider(width: 0.5),
-                Expanded(child: _HomeScreenState._body(index)),
+                Expanded(child: body),
               ],
             ),
           ),
@@ -190,8 +212,9 @@ class _DesktopLayout extends StatelessWidget {
   final int index;
   final ValueChanged<int> onTap;
   final Chat? activeCall;
+  final Widget body;
 
-  const _DesktopLayout({required this.index, required this.onTap, this.activeCall});
+  const _DesktopLayout({required this.index, required this.onTap, this.activeCall, required this.body});
 
   static const _items = _HomeScreenState._items;
 
@@ -301,7 +324,7 @@ class _DesktopLayout extends StatelessWidget {
           Expanded(
             child: Column(
               children: [
-                Expanded(child: _HomeScreenState._body(index)),
+                Expanded(child: body),
                 if (activeCall != null) _MinimizedCallBar(chat: activeCall!),
               ],
             ),
