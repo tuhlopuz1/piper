@@ -69,25 +69,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const SizedBox(height: 20),
-
-                  // ── Back button ─────────────────────────────────────────────
-                  GestureDetector(
-                    onTap: () => Navigator.pop(context),
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: AppColors.bgSubtle,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppColors.border, width: 0.5),
-                      ),
-                      child: Icon(Icons.arrow_back_ios_new_rounded,
-                          color: AppColors.foreground, size: 16),
-                    ),
-                  ).animate().fadeIn(duration: 400.ms),
-
-                  const SizedBox(height: 36),
+                  const SizedBox(height: 56),
 
                   // ── Header ──────────────────────────────────────────────────
                   Text(

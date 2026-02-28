@@ -5,6 +5,8 @@ import '../../../theme/app_theme.dart';
 import '../../../models/chat.dart';
 import '../../../services/theme_notifier.dart';
 import '../../../widgets/app_avatar.dart';
+import '../../profile/edit_profile_screen.dart';
+import '../../settings/device_info_screen.dart';
 
 class SettingsTab extends StatelessWidget {
   const SettingsTab({super.key});
@@ -37,78 +39,85 @@ class SettingsTab extends StatelessWidget {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      AppColors.primary.withValues(alpha: 0.14),
-                      AppColors.accent.withValues(alpha: 0.07),
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                      color: AppColors.primary.withValues(alpha: 0.2),
-                      width: 0.5),
+              child: GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const EditProfileScreen()),
                 ),
-                child: Row(
-                  children: [
-                    AppAvatar(
-                      style: AvatarStyle.violet,
-                      initials: 'ME',
-                      size: 54,
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        AppColors.primary.withValues(alpha: 0.14),
+                        AppColors.accent.withValues(alpha: 0.07),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Мой профиль',
-                            style: GoogleFonts.inter(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.foreground,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.2),
+                        width: 0.5),
+                  ),
+                  child: Row(
+                    children: [
+                      AppAvatar(
+                        style: AvatarStyle.violet,
+                        initials: 'ME',
+                        size: 54,
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Мой профиль',
+                              style: GoogleFonts.inter(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.foreground,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 3),
-                          Row(
-                            children: [
-                              Container(
-                                width: 6,
-                                height: 6,
-                                decoration: const BoxDecoration(
-                                  color: AppColors.online,
-                                  shape: BoxShape.circle,
+                            const SizedBox(height: 3),
+                            Row(
+                              children: [
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: const BoxDecoration(
+                                    color: AppColors.online,
+                                    shape: BoxShape.circle,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 5),
-                              Text(
-                                'В сети · 192.168.1.5',
-                                style: GoogleFonts.inter(
-                                  fontSize: 12,
-                                  color: AppColors.mutedForeground,
+                                const SizedBox(width: 5),
+                                Text(
+                                  'В сети · 192.168.1.5',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 12,
+                                    color: AppColors.mutedForeground,
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        ],
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: AppColors.bgSubtle,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: AppColors.border, width: 0.5),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppColors.bgSubtle,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: AppColors.border, width: 0.5),
+                        ),
+                        child: Icon(Icons.edit_outlined,
+                            size: 16, color: AppColors.mutedForeground),
                       ),
-                      child: Icon(Icons.edit_outlined,
-                          size: 16, color: AppColors.mutedForeground),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               )
                   .animate()
@@ -125,11 +134,20 @@ class SettingsTab extends StatelessWidget {
                 children: [
                   _Section(
                     title: 'Сеть',
-                    items: const [
+                    items: [
                       _Item(Icons.wifi_rounded,
                           'Обнаружение в сети', 'Включено', true),
-                      _Item(Icons.broadcast_on_personal_rounded,
-                          'Имя устройства', 'my-device', false),
+                      _Item(
+                        Icons.info_outline_rounded,
+                        'Информация об устройстве',
+                        null,
+                        false,
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const DeviceInfoScreen()),
+                        ),
+                      ),
                     ],
                   ).animate(delay: 80.ms).fadeIn(duration: 380.ms).slideY(
                       begin: 0.08, end: 0, duration: 380.ms),
@@ -208,12 +226,15 @@ class _Item extends StatelessWidget {
   final String title;
   final String? value;
   final bool hasToggle;
+  final VoidCallback? onTap;
 
-  const _Item(this.icon, this.title, this.value, this.hasToggle);
+  const _Item(this.icon, this.title, this.value, this.hasToggle, {this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return GestureDetector(
+      onTap: hasToggle ? null : onTap,
+      child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
         children: [
@@ -252,6 +273,7 @@ class _Item extends StatelessWidget {
                 color: AppColors.mutedForeground, size: 18),
           ],
         ],
+      ),
       ),
     );
   }

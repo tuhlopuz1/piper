@@ -107,14 +107,12 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
                   children: [
                     _CallButton(
                       icon: _muted ? Icons.mic_off_rounded : Icons.mic_none_rounded,
-                      label: _muted ? 'Вкл. мик.' : 'Выкл. мик.',
                       color: _muted ? AppColors.destructive : AppColors.bgSubtle,
                       iconColor: _muted ? Colors.white : AppColors.foreground,
                       onTap: () => setState(() => _muted = !_muted),
                     ),
                     _CallButton(
                       icon: Icons.call_end_rounded,
-                      label: 'Завершить',
                       color: AppColors.destructive,
                       iconColor: Colors.white,
                       size: 68,
@@ -125,7 +123,6 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
                     ),
                     _CallButton(
                       icon: _speaker ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-                      label: _speaker ? 'Динамик вкл.' : 'Динамик выкл.',
                       color: _speaker ? AppColors.primary : AppColors.bgSubtle,
                       iconColor: _speaker ? Colors.white : AppColors.foreground,
                       onTap: () => setState(() => _speaker = !_speaker),
@@ -143,7 +140,6 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
 
 class _CallButton extends StatelessWidget {
   final IconData icon;
-  final String label;
   final Color color;
   final Color iconColor;
   final double size;
@@ -151,7 +147,6 @@ class _CallButton extends StatelessWidget {
 
   const _CallButton({
     required this.icon,
-    required this.label,
     required this.color,
     required this.iconColor,
     this.size = 56,
@@ -162,22 +157,11 @@ class _CallButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: size,
-            height: size,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-            child: Icon(icon, color: iconColor, size: size * 0.42),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            style: GoogleFonts.inter(fontSize: 11, color: AppColors.mutedForeground),
-            textAlign: TextAlign.center,
-          ),
-        ],
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        child: Icon(icon, color: iconColor, size: size * 0.42),
       ),
     );
   }
