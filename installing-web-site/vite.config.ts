@@ -15,5 +15,5 @@ export default defineConfig({
     host: true,
     strictPort: true,
   },
-  base: '/piper/',
+  // base: '/piper/'
 })

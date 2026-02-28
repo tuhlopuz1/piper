@@ -92,6 +92,7 @@ export function HeroSection() {
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30 animate-pulse-glow">
               <img src="logo.png" alt="Piper" className="w-10 h-10 object-contain" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
               <Wifi className="w-8 h-8 text-white absolute" style={{ display: 'none' }} />
+              <span className="text-white text-4xl font-bold">P</span>
             </div>
           </div>
           <h1 className="text-6xl md:text-8xl font-bold bg-gradient-to-r from-white via-indigo-200 to-purple-300 bg-clip-text text-transparent">
