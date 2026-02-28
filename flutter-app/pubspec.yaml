@@ -16,6 +16,10 @@ dependencies:
   google_fonts: ^6.2.1
   flutter_animate: ^4.5.0
   smooth_page_indicator: ^1.2.0+3
+  # Networking / IPC with Go daemon
+  http: ^1.2.0
+  web_socket_channel: ^3.0.0
+  path_provider: ^2.1.4
 
 dev_dependencies:
   flutter_test:
@@ -24,3 +28,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/daemon/piper-daemon-windows-amd64.exe
+    - assets/daemon/piper-daemon-linux-amd64
+    - assets/daemon/piper-daemon-android-arm64

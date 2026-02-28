@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
 import '../../models/message.dart';
+import '../../services/peer_store.dart';
 import '../../widgets/app_avatar.dart';
 import '../call/voice_call_screen.dart';
 import '../call/video_call_screen.dart';
@@ -30,40 +31,39 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    _messages = getMockMessages(widget.chat);
+    _messages = List.of(PeerStore.instance.messagesFor(widget.chat.id));
+    PeerStore.instance.addListener(_onMessages);
   }
 
   @override
   void dispose() {
+    PeerStore.instance.removeListener(_onMessages);
     _textCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
   }
 
-  void _sendText() {
-    final text = _textCtrl.text.trim();
-    if (text.isEmpty) return;
+  void _onMessages() {
+    if (!mounted) return;
     setState(() {
-      _messages.add(Message(
-        id: 'new_${DateTime.now().millisecondsSinceEpoch}',
-        isMe: true,
-        type: MsgType.text,
-        text: text,
-        time: DateTime.now(),
-        delivered: false,
-      ));
-      _textCtrl.clear();
-      _showAttach = false;
+      _messages = List.of(PeerStore.instance.messagesFor(widget.chat.id));
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
-        _scrollCtrl.animateTo(
-          0,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
-        );
+        _scrollCtrl.animateTo(0,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutCubic);
       }
     });
+  }
+
+  void _sendText() {
+    final text = _textCtrl.text.trim();
+    if (text.isEmpty) return;
+    _textCtrl.clear();
+    setState(() => _showAttach = false);
+    PeerStore.instance.sendMessage(widget.chat.id, text);
+    // _onMessages listener will fire and update _messages
   }
 
   void _startRecording() => setState(() => _isRecording = true);

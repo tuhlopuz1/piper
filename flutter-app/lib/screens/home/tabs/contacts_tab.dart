@@ -4,6 +4,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../theme/app_theme.dart';
 import '../../../models/chat.dart';
+import '../../../services/peer_store.dart';
 import '../../../widgets/app_avatar.dart';
 import '../../contacts/contact_info_screen.dart';
 import '../../chat/chat_screen.dart';
@@ -29,13 +30,17 @@ class _ContactsTabState extends State<ContactsTab>
       vsync: this,
       duration: const Duration(seconds: 3),
     )..repeat();
+    PeerStore.instance.addListener(_onPeersChanged);
   }
 
   @override
   void dispose() {
+    PeerStore.instance.removeListener(_onPeersChanged);
     _radarCtrl.dispose();
     super.dispose();
   }
+
+  void _onPeersChanged() => setState(() {});
 
   void _refresh() {
     setState(() => _scanning = true);
@@ -44,8 +49,8 @@ class _ContactsTabState extends State<ContactsTab>
     });
   }
 
-  List<Contact> get _online => mockContacts.where((c) => c.isOnline).toList();
-  List<Contact> get _offline => mockContacts.where((c) => !c.isOnline).toList();
+  List<Contact> get _online => PeerStore.instance.peers;
+  List<Contact> get _offline => const [];
 
   Chat _contactToChat(Contact c) => Chat(
         id: c.id,

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -18,11 +19,26 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
   bool _muted = false;
   bool _speaker = false;
   int _seconds = 0;
+  Timer? _timer;
 
-  String get _timer {
+  String get _timerStr {
     final m = _seconds ~/ 60;
     final s = _seconds % 60;
     return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _seconds++);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -87,7 +103,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
               const SizedBox(height: 8),
 
               Text(
-                _seconds > 0 ? _timer : 'Соединяется...',
+                _seconds > 0 ? _timerStr : 'Соединяется...',
                 style: GoogleFonts.inter(
                   fontSize: 15,
                   color: AppColors.mutedForeground,

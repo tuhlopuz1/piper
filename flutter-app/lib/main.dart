@@ -1,7 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'theme/app_theme.dart';
 import 'services/theme_notifier.dart';
+import 'services/daemon_service.dart';
+import 'services/ipc_service.dart';
 import 'screens/onboarding/onboarding_screen.dart';
 
 void main() async {
@@ -15,6 +19,18 @@ void main() async {
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
+
+  // Start Go daemon (supported platforms only)
+  if (Platform.isWindows || Platform.isLinux || Platform.isAndroid) {
+    try {
+      final port = await DaemonService.instance.start(
+        name: Platform.localHostname,
+      );
+      IpcService.instance.connect(port);
+    } catch (e) {
+      debugPrint('[main] daemon unavailable: $e — UI-only mode');
+    }
+  }
 
   runApp(const PiperApp());
 }

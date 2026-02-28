@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
+import '../../services/ipc_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../home/home_screen.dart';
 
@@ -35,6 +36,11 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   void _done() {
     if (!_ready) return;
     _focus.unfocus();
+    // Update daemon with user's chosen name and avatar colour
+    IpcService.instance.setProfile(
+      _ctrl.text.trim(),
+      '#${_avatar.color.toARGB32().toRadixString(16).substring(2)}',
+    );
     Navigator.pushReplacement(
       context,
       PageRouteBuilder(
