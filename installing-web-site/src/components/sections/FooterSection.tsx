@@ -12,7 +12,7 @@ export function FooterSection() {
             </div>
             <div>
               <p className="text-white font-semibold text-sm">Piper</p>
-              <p className="text-white/40 text-xs">© 2025 Team Piper. Хакатон-проект.</p>
+              <p className="text-white/40 text-xs">© 2026 Team докер навозник. Хакатон-проект.</p>
             </div>
           </div>
 
@@ -28,7 +28,7 @@ export function FooterSection() {
               GitHub
             </a>
             <a
-              href="mailto:contact@piper.local"
+              href="vickz.ru"
               className="flex items-center gap-2 text-white/50 hover:text-white transition-colors text-sm"
             >
               <Mail className="w-4 h-4" />
