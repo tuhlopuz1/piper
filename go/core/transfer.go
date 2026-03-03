@@ -30,6 +30,7 @@ const (
 type Transfer struct {
 	ID       string
 	PeerID   string
+	GroupID  string // non-empty when this transfer is part of a group file send
 	FileName string
 	FileSize int64
 	Sending  bool  // true = outgoing, false = incoming

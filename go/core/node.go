@@ -320,6 +320,90 @@ func (n *Node) SendFile(peerID, filePath string) error {
 	return nil
 }
 
+// SendFileToGroup sends a file to every member of the group. Each member gets
+// an independent transfer with its own file handle and streaming goroutine.
+// The GroupID is stored on each Transfer so the TUI can route events correctly.
+func (n *Node) SendFileToGroup(groupID, filePath string) (sent int, _ error) {
+	g := n.groups.Get(groupID)
+	if g == nil {
+		return 0, fmt.Errorf("unknown group %s", groupID)
+	}
+
+	// Stat the file once to validate before fanning out.
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("stat file: %w", err)
+	}
+	if info.IsDir() {
+		return 0, fmt.Errorf("%s is a directory", filePath)
+	}
+
+	var firstErr error
+	for memberID := range g.Members {
+		if memberID == n.id {
+			continue
+		}
+		peer := n.peers.Get(memberID)
+		if peer == nil || isZeroKey(peer.SharedKey) {
+			continue
+		}
+
+		f, err := os.Open(filePath)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("open file: %w", err)
+			}
+			continue
+		}
+
+		tid := uuid.NewString()
+		t := n.transfers.Start(tid, memberID, info.Name(), info.Size(), true)
+		t.GroupID = groupID
+		t.file = f
+		t.filePath = filePath
+
+		offer := Message{
+			ID:         uuid.NewString(),
+			Type:       MsgTypeFileOffer,
+			PeerID:     n.id,
+			Name:       n.name,
+			To:         memberID,
+			TransferID: tid,
+			FileName:   info.Name(),
+			FileSize:   info.Size(),
+			Timestamp:  time.Now(),
+		}
+
+		n.mu.Lock()
+		cn := n.connByPeerID[memberID]
+		n.mu.Unlock()
+		if cn == nil {
+			f.Close()
+			n.transfers.Fail(tid, "no connection to peer")
+			continue
+		}
+		if err := cn.send(offer); err != nil {
+			f.Close()
+			n.transfers.Fail(tid, err.Error())
+			continue
+		}
+
+		n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferOffered}})
+		log.Printf("[node] sent group file offer %q (%d bytes) to %s", info.Name(), info.Size(), peer.DisplayName)
+
+		go n.streamFileChunks(t, peer.SharedKey, cn)
+		sent++
+	}
+
+	if sent == 0 && firstErr != nil {
+		return 0, firstErr
+	}
+	if sent == 0 {
+		return 0, fmt.Errorf("no reachable members in group")
+	}
+	return sent, nil
+}
+
 // streamFileChunks waits for FileAccept (via t.accepted channel), then reads
 // the file in ChunkSize pieces, encrypts each with the shared key, and sends
 // FileChunk messages. Finally it sends FileDone with the SHA-256 hash.

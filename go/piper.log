@@ -1,0 +1,15 @@
+2026/03/04 00:45:34 [node] listening on :49197 (id=13866ecf-68e4-48bc-962a-ba0b7db88e82)
+2026/03/04 00:45:34 [node] ECDH shared key established with DESKTOP-MB879JA (08f999ca)
+2026/03/04 00:47:11 [node] listening on :65419 (id=653f436c-4194-42b6-8429-8037887d55cb)
+2026/03/04 00:47:16 [node] ECDH shared key established with DESKTOP-0D8CF7J (af039986)
+2026/03/04 00:47:57 [node] sent file offer "7.exe" (8451072 bytes) to DESKTOP-0D8CF7J
+2026/03/04 00:47:57 [node] file "7.exe" accepted by DESKTOP-0D8CF7J
+2026/03/04 00:47:57 [node] file "7.exe" sent to af039986 (hash=0ff8cfbded41cd72)
+2026/03/04 00:48:09 [node] read from af039986: read len: read tcp 192.168.1.210:65421->192.168.1.200:55970: wsarecv: An existing connection was forcibly closed by the remote host.
+2026/03/04 00:48:14 [node] ECDH shared key established with DESKTOP-0D8CF7J#2 (4a7abea1)
+2026/03/04 00:48:20 [node] created group "123" (b79c5040)
+2026/03/04 00:48:22 [node] invited DESKTOP-0D8CF7J#2 to group "123"
+2026/03/04 00:48:47 [node] sent group file offer "5" (7938123 bytes) to DESKTOP-0D8CF7J#2
+2026/03/04 00:48:47 [node] file "5" accepted by DESKTOP-0D8CF7J
+2026/03/04 00:48:47 [node] file "5" sent to 4a7abea1 (hash=2170430619910398)
+2026/03/04 00:49:05 [node] read from 4a7abea1: read len: read tcp 192.168.1.210:65524->192.168.1.200:56046: wsarecv: An existing connection was forcibly closed by the remote host.

@@ -1,0 +1,204 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:ffi';
+
+import 'package:ffi/ffi.dart';
+
+import 'piper_bindings.dart';
+import 'piper_events.dart';
+
+/// High-level Dart wrapper around the Go Piper node (via FFI).
+///
+/// Usage:
+/// ```dart
+/// final node = PiperNode.create('Alice');
+/// node.start();
+/// node.events.listen((event) { ... });
+/// node.send('Hello!'); // global broadcast
+/// node.send('Hey', toPeerID: 'abc-123'); // direct
+/// node.stop();
+/// ```
+class PiperNode {
+  final PiperBindings _bindings;
+  final int _handle;
+  final StreamController<PiperEvent> _eventController =
+      StreamController<PiperEvent>.broadcast();
+
+  NativeCallable<EventCallbackC>? _nativeCallback;
+
+  PiperNode._(this._bindings, this._handle);
+
+  /// Create a new node with the given display name.
+  factory PiperNode.create(String name, {String? libraryPath}) {
+    final bindings = PiperBindings(libraryPath: libraryPath);
+    final namePtr = name.toNativeUtf8();
+    final handle = bindings.createNode(namePtr);
+    malloc.free(namePtr);
+    return PiperNode._(bindings, handle);
+  }
+
+  /// Start the node (TCP listener + peer discovery).
+  /// Throws on failure.
+  void start() {
+    final errPtr = _bindings.startNode(_handle);
+    if (errPtr != nullptr) {
+      final err = errPtr.toDartString();
+      _bindings.freeString(errPtr);
+      throw Exception('Failed to start node: $err');
+    }
+    _setupEventCallback();
+  }
+
+  /// Stop the node and release resources.
+  void stop() {
+    _nativeCallback?.close();
+    _nativeCallback = null;
+    _bindings.stopNode(_handle);
+    _eventController.close();
+  }
+
+  /// The node's stable peer ID.
+  String get id {
+    final ptr = _bindings.nodeID(_handle);
+    final val = ptr.toDartString();
+    _bindings.freeString(ptr);
+    return val;
+  }
+
+  /// The node's display name.
+  String get name {
+    final ptr = _bindings.nodeName(_handle);
+    final val = ptr.toDartString();
+    _bindings.freeString(ptr);
+    return val;
+  }
+
+  /// Stream of events from the Go backend.
+  Stream<PiperEvent> get events => _eventController.stream;
+
+  // ─── Messaging ─────────────────────────────────────────────────────────────
+
+  /// Send a text message. If [toPeerID] is null, broadcasts globally.
+  void send(String text, {String? toPeerID}) {
+    final textPtr = text.toNativeUtf8();
+    final toPtr = (toPeerID ?? '').toNativeUtf8();
+    _bindings.send(_handle, textPtr, toPtr);
+    malloc.free(textPtr);
+    malloc.free(toPtr);
+  }
+
+  /// Send an encrypted message to a group.
+  void sendGroup(String text, String groupID) {
+    final textPtr = text.toNativeUtf8();
+    final gidPtr = groupID.toNativeUtf8();
+    _bindings.sendGroup(_handle, textPtr, gidPtr);
+    malloc.free(textPtr);
+    malloc.free(gidPtr);
+  }
+
+  /// Send a file to a single peer. Throws on error.
+  void sendFile(String peerID, String filePath) {
+    final pidPtr = peerID.toNativeUtf8();
+    final pathPtr = filePath.toNativeUtf8();
+    final errPtr = _bindings.sendFile(_handle, pidPtr, pathPtr);
+    malloc.free(pidPtr);
+    malloc.free(pathPtr);
+    if (errPtr != nullptr) {
+      final err = errPtr.toDartString();
+      _bindings.freeString(errPtr);
+      throw Exception('SendFile failed: $err');
+    }
+  }
+
+  /// Send a file to all members of a group. Throws on error.
+  void sendFileToGroup(String groupID, String filePath) {
+    final gidPtr = groupID.toNativeUtf8();
+    final pathPtr = filePath.toNativeUtf8();
+    final errPtr = _bindings.sendFileToGroup(_handle, gidPtr, pathPtr);
+    malloc.free(gidPtr);
+    malloc.free(pathPtr);
+    if (errPtr != nullptr) {
+      final err = errPtr.toDartString();
+      _bindings.freeString(errPtr);
+      throw Exception('SendFileToGroup failed: $err');
+    }
+  }
+
+  // ─── Groups ────────────────────────────────────────────────────────────────
+
+  /// Create a new group and return its ID.
+  String createGroup(String name) {
+    final namePtr = name.toNativeUtf8();
+    final idPtr = _bindings.createGroup(_handle, namePtr);
+    malloc.free(namePtr);
+    final gid = idPtr.toDartString();
+    _bindings.freeString(idPtr);
+    return gid;
+  }
+
+  /// Invite a peer to a group.
+  void inviteToGroup(String groupID, String peerID) {
+    final gidPtr = groupID.toNativeUtf8();
+    final pidPtr = peerID.toNativeUtf8();
+    _bindings.inviteToGroup(_handle, gidPtr, pidPtr);
+    malloc.free(gidPtr);
+    malloc.free(pidPtr);
+  }
+
+  /// Leave a group.
+  void leaveGroup(String groupID) {
+    final gidPtr = groupID.toNativeUtf8();
+    _bindings.leaveGroup(_handle, gidPtr);
+    malloc.free(gidPtr);
+  }
+
+  // ─── Queries ───────────────────────────────────────────────────────────────
+
+  /// Get a snapshot of all known peers.
+  List<PeerInfo> get peers {
+    final ptr = _bindings.listPeers(_handle);
+    final jsonStr = ptr.toDartString();
+    _bindings.freeString(ptr);
+    final list = jsonDecode(jsonStr) as List<dynamic>;
+    return list
+        .map((e) => PeerInfo.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Get a snapshot of all groups.
+  List<GroupInfo> get groups {
+    final ptr = _bindings.listGroups(_handle);
+    final jsonStr = ptr.toDartString();
+    _bindings.freeString(ptr);
+    final list = jsonDecode(jsonStr) as List<dynamic>;
+    return list
+        .map((e) => GroupInfo.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  // ─── Internal ──────────────────────────────────────────────────────────────
+
+  void _setupEventCallback() {
+    // NativeCallable.listener wraps a Dart closure so it can be called from
+    // any native thread. The Go event-pump goroutine invokes this callback
+    // with JSON; Dart schedules the closure on this isolate automatically.
+    _nativeCallback = NativeCallable<EventCallbackC>.listener(
+      _handleNativeEvent,
+    );
+    _bindings.setEventCallback(_handle, _nativeCallback!.nativeFunction);
+  }
+
+  void _handleNativeEvent(Pointer<Utf8> eventJSON) {
+    final jsonStr = eventJSON.toDartString();
+    // Go side frees the C string after the callback returns.
+    try {
+      final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+      final event = PiperEvent.fromJson(map);
+      if (!_eventController.isClosed) {
+        _eventController.add(event);
+      }
+    } catch (e) {
+      // Malformed event — ignore silently.
+    }
+  }
+}

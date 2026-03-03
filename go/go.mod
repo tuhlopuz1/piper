@@ -1,4 +1,4 @@
-module github.com/catsi/claudemess
+module github.com/catsi/piper
 
 go 1.22
 

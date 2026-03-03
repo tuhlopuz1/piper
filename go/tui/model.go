@@ -29,7 +29,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/catsi/claudemess/core"
+	"github.com/catsi/piper/core"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -395,28 +395,15 @@ func (m Model) updateSendFile(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd)
 		path := strings.TrimSpace(m.fileInput.Value())
 		if path != "" && m.activeChatID != "" {
 			if isGroupChat(m.activeChatID) {
-				// Group file transfer: send to each member individually.
 				gid := groupIDFromChat(m.activeChatID)
-				g := m.node.GroupByID(gid)
-				if g != nil {
-					members := g.MemberIDs()
-					sent := 0
-					for _, mid := range members {
-						if mid == m.node.ID() {
-							continue
-						}
-						if err := m.node.SendFile(mid, path); err != nil {
-							notice := systemMsgStyle.Render(fmt.Sprintf("  File error (%s): %s", mid[:8], err))
-							m = m.addNoticeToChat(m.activeChatID, notice)
-						} else {
-							sent++
-						}
-					}
-					if sent > 0 {
-						notice := systemMsgStyle.Render(
-							fmt.Sprintf("  Sending file to %d group member(s)", sent))
-						m = m.addNoticeToChat(m.activeChatID, notice)
-					}
+				sent, err := m.node.SendFileToGroup(gid, path)
+				if err != nil {
+					notice := systemMsgStyle.Render(fmt.Sprintf("  File error: %s", err))
+					m = m.addNoticeToChat(m.activeChatID, notice)
+				} else if sent > 0 {
+					notice := systemMsgStyle.Render(
+						fmt.Sprintf("  Sending file to %d group member(s)", sent))
+					m = m.addNoticeToChat(m.activeChatID, notice)
 				}
 			} else {
 				// Direct file transfer.
@@ -440,8 +427,11 @@ func (m Model) updateSendFile(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd)
 
 func (m Model) handleTransferEvent(ev core.TransferEvent) Model {
 	t := ev.Transfer
-	// Transfer notices go into the peer's chat.
+	// Route transfer notices: group transfers → group chat, direct → peer chat.
 	chatID := t.PeerID
+	if t.GroupID != "" {
+		chatID = groupChatID(t.GroupID)
+	}
 
 	var notice string
 	switch ev.Kind {
@@ -522,7 +512,7 @@ func (m Model) View() string {
 
 	shortcuts := "[tab] panels  [enter] send/open  [esc] global  [ctrl+g] group  [ctrl+f] file"
 	header := headerStyle.Width(m.width).Render(
-		fmt.Sprintf(" claudemess  %s  %s", m.node.Name(), shortcuts),
+		fmt.Sprintf(" piper  %s  %s", m.node.Name(), shortcuts),
 	)
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
 		m.renderPanel(peersW),
