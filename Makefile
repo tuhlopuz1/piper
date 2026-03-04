@@ -8,7 +8,7 @@
 
 PS := powershell -NoProfile -ExecutionPolicy Bypass -File
 
-.PHONY: all installer zip package clean
+.PHONY: all installer zip package android clean
 
 all:
 	$(PS) scripts\build-windows.ps1 -Target all
@@ -21,6 +21,9 @@ zip:
 
 package:
 	$(PS) scripts\build-windows.ps1 -Target package
+
+android:
+	$(PS) scripts\build-android.ps1
 
 clean:
 	$(PS) scripts\build-windows.ps1 -Target clean

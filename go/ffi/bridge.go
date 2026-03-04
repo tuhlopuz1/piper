@@ -80,14 +80,23 @@ type ffiGroup struct {
 // ─── Node lifecycle ──────────────────────────────────────────────────────────
 
 //export PiperCreateNode
-func PiperCreateNode(name *C.char) C.int {
-	n := core.NewNode(C.GoString(name))
+func PiperCreateNode(name *C.char, nodeID *C.char) C.int {
+	n := core.NewNodeWithID(C.GoString(name), C.GoString(nodeID))
 	handleMu.Lock()
 	h := nextHandle
 	nextHandle++
 	nodes[h] = &nodeEntry{node: n}
 	handleMu.Unlock()
 	return h
+}
+
+//export PiperSetNodeName
+func PiperSetNodeName(handle C.int, name *C.char) {
+	e := getEntry(handle)
+	if e == nil {
+		return
+	}
+	e.node.SetName(C.GoString(name))
 }
 
 //export PiperStartNode
@@ -293,6 +302,17 @@ func eventPump(e *nodeEntry) {
 			C.free(unsafe.Pointer(cstr))
 		}
 	}
+}
+
+// ─── Configuration ───────────────────────────────────────────────────────────
+
+//export PiperSetDownloadsDir
+func PiperSetDownloadsDir(handle C.int, dir *C.char) {
+	e := getEntry(handle)
+	if e == nil {
+		return
+	}
+	e.node.SetDownloadsDir(C.GoString(dir))
 }
 
 // ─── Memory management ──────────────────────────────────────────────────────

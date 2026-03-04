@@ -19,8 +19,7 @@ class _ChatsTabState extends State<ChatsTab> {
   @override
   Widget build(BuildContext context) {
     final svc = context.watch<PiperService>();
-    // Use real chats when the node is running, fall back to mock for UI preview
-    final chats = svc.isRunning ? svc.chats : mockChats;
+    final chats = svc.chats;
 
     return Scaffold(
       backgroundColor: AppColors.bgBase,

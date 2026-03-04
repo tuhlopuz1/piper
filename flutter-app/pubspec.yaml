@@ -22,6 +22,12 @@ dependencies:
   provider: ^6.1.2
   # Persistent user settings (name, avatar)
   shared_preferences: ^2.3.3
+  # File picker (send files)
+  file_picker: ^8.1.4
+  # Platform paths (Downloads folder)
+  path_provider: ^2.1.4
+  # Open files with native app
+  open_file: ^3.3.2
 
 dev_dependencies:
   flutter_test:

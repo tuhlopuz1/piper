@@ -3,12 +3,12 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../../theme/app_theme.dart';
-import '../../../models/chat.dart';
 import '../../../services/piper_service.dart';
 import '../../../services/theme_notifier.dart';
 import '../../../widgets/app_avatar.dart';
 import '../../profile/edit_profile_screen.dart';
 import '../../settings/device_info_screen.dart';
+import '../../settings/downloads_screen.dart';
 
 class SettingsTab extends StatelessWidget {
   const SettingsTab({super.key});
@@ -67,9 +67,9 @@ class SettingsTab extends StatelessWidget {
                   child: Row(
                     children: [
                       AppAvatar(
-                        style: AvatarStyle.violet,
+                        style: svc.avatarStyle,
                         initials: svc.myName.isNotEmpty
-                            ? svc.myName.substring(0, svc.myName.length.clamp(0, 2)).toUpperCase()
+                            ? svc.initialsFor(svc.myName)
                             : 'ME',
                         size: 54,
                       ),
@@ -103,7 +103,9 @@ class SettingsTab extends StatelessWidget {
                                     svc.isRunning
                                         ? 'В сети · ${svc.myId.length > 12 ? svc.myId.substring(0, 12) : svc.myId}'
                                         : svc.initError != null
-                                            ? 'Ошибка подключения'
+                                            ? svc.initError!.length > 40
+                                                ? '${svc.initError!.substring(0, 40)}…'
+                                                : svc.initError!
                                             : 'Не подключено',
                                     style: GoogleFonts.inter(
                                       fontSize: 12,
@@ -149,6 +151,17 @@ class SettingsTab extends StatelessWidget {
                     items: [
                       _Item(Icons.wifi_rounded,
                           'Обнаружение в сети', 'Включено', true),
+                      _Item(
+                        Icons.download_outlined,
+                        'Загрузки',
+                        null,
+                        false,
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const DownloadsScreen()),
+                        ),
+                      ),
                       _Item(
                         Icons.info_outline_rounded,
                         'Информация об устройстве',

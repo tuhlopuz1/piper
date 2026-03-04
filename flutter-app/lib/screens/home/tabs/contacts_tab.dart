@@ -62,7 +62,7 @@ class _ContactsTabState extends State<ContactsTab>
   @override
   Widget build(BuildContext context) {
     final svc = context.watch<PiperService>();
-    final all = svc.isRunning ? svc.contacts : mockContacts;
+    final all = svc.contacts;
     final online = all.where((c) => c.isOnline).toList();
     final offline = all.where((c) => !c.isOnline).toList();
 

@@ -88,7 +88,8 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
-extern int PiperCreateNode(char* name);
+extern int PiperCreateNode(char* name, char* nodeID);
+extern void PiperSetNodeName(int handle, char* name);
 extern char* PiperStartNode(int handle);
 extern void PiperStopNode(int handle);
 extern char* PiperNodeID(int handle);
@@ -103,6 +104,7 @@ extern void PiperLeaveGroup(int handle, char* groupID);
 extern char* PiperListPeers(int handle);
 extern char* PiperListGroups(int handle);
 extern void PiperSetEventCallback(int handle, EventCallback cb);
+extern void PiperSetDownloadsDir(int handle, char* dir);
 extern void PiperFreeString(char* s);
 
 #ifdef __cplusplus

@@ -45,6 +45,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     final name = _ctrl.text.trim();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('user_name', name);
+    await prefs.setInt('user_avatar', _avatar.index);
 
     if (mounted) {
       await context.read<PiperService>().init(name);

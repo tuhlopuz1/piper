@@ -49,6 +49,9 @@ type Node struct {
 	groups    *GroupManager
 	transfers *TransferManager
 
+	// downloadsDir is where received files are saved. Defaults to FileDownloadDir.
+	downloadsDir string
+
 	// connByPeerID maps peerID -> *conn (active TCP connection).
 	mu           sync.Mutex
 	connByPeerID map[string]*conn
@@ -76,18 +79,28 @@ func (c *conn) send(msg Message) error {
 // NewNode creates a Node with the given display name.
 // The node is not started until Start() is called.
 func NewNode(name string) *Node {
+	return NewNodeWithID(name, "")
+}
+
+// NewNodeWithID creates a Node with the given display name and a pre-existing
+// peer ID. If id is empty, a new random UUID is generated.
+func NewNodeWithID(name, id string) *Node {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	kp, err := GenerateKeyPair()
 	if err != nil {
-		// Should never fail; panic is acceptable here.
 		panic("piper: GenerateKeyPair: " + err.Error())
 	}
 
+	if id == "" {
+		id = uuid.NewString()
+	}
+
 	return &Node{
-		id:           uuid.NewString(),
+		id:           id,
 		name:         name,
 		keyPair:      kp,
+		downloadsDir: FileDownloadDir,
 		peers:        NewPeerManager(),
 		groups:       NewGroupManager(),
 		transfers:    NewTransferManager(),
@@ -98,11 +111,18 @@ func NewNode(name string) *Node {
 	}
 }
 
+// SetName updates the display name used in outgoing messages and discovery.
+func (n *Node) SetName(name string) { n.name = name }
+
 // ID returns the stable peer ID for this node.
 func (n *Node) ID() string { return n.id }
 
 // Name returns the display name for this node.
 func (n *Node) Name() string { return n.name }
+
+// SetDownloadsDir configures where received files are saved.
+// Must be called before Start(). The directory is created on first use.
+func (n *Node) SetDownloadsDir(dir string) { n.downloadsDir = dir }
 
 // Events returns the read-only event channel.
 func (n *Node) Events() <-chan Event { return n.eventCh }
@@ -460,7 +480,6 @@ func (n *Node) streamFileChunks(t *Transfer, key [32]byte, cn *conn) {
 
 			seq++
 			n.transfers.UpdateProgress(t.ID, t.Progress+int64(nr))
-			t.Progress += int64(nr)
 			n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferProgress}})
 		}
 		if readErr == io.EOF {
@@ -710,7 +729,7 @@ func (n *Node) completeHandshake(cn *conn, name string, theirPubKey []byte, addr
 	n.connByPeerID[cn.peerID] = cn
 	n.mu.Unlock()
 
-	info, isNew := n.peers.Upsert(cn.peerID, name, addr, PeerConnected)
+	info, _ := n.peers.Upsert(cn.peerID, name, addr, PeerConnected)
 
 	// Store pubkey and derive shared secret.
 	if len(theirPubKey) == 32 {
@@ -726,9 +745,7 @@ func (n *Node) completeHandshake(cn *conn, name string, theirPubKey []byte, addr
 		log.Printf("[node] peer %s sent no pubkey; direct messages will be unavailable", cn.peerID[:8])
 	}
 
-	if isNew {
-		n.emit(Event{Peer: &PeerEvent{Peer: info, Kind: PeerJoined}})
-	}
+	n.emit(Event{Peer: &PeerEvent{Peer: info, Kind: PeerJoined}})
 }
 
 // ─── read loop ────────────────────────────────────────────────────────────────
@@ -752,6 +769,7 @@ func (n *Node) readLoop(cn *conn) {
 
 		switch msg.Type {
 		case MsgTypeText:
+			n.maybeUpdatePeerName(msg.PeerID, msg.Name)
 			n.emit(Event{Msg: &msg})
 
 		case MsgTypeDirect:
@@ -770,6 +788,7 @@ func (n *Node) readLoop(cn *conn) {
 				continue
 			}
 			msg.Content = plaintext // replace ciphertext with plaintext before emitting
+			n.maybeUpdatePeerName(msg.PeerID, msg.Name)
 			n.emit(Event{Msg: &msg})
 
 		case MsgTypeGroupInvite:
@@ -894,12 +913,16 @@ func (n *Node) handleFileOffer(msg Message, cn *conn) {
 	}
 
 	// Auto-accept: create download directory and destination file.
-	if err := os.MkdirAll(FileDownloadDir, 0o755); err != nil {
-		log.Printf("[node] mkdir %s: %v", FileDownloadDir, err)
+	dlDir := n.downloadsDir
+	if dlDir == "" {
+		dlDir = FileDownloadDir
+	}
+	if err := os.MkdirAll(dlDir, 0o755); err != nil {
+		log.Printf("[node] mkdir %s: %v", dlDir, err)
 		return
 	}
 
-	destPath := filepath.Join(FileDownloadDir, msg.FileName)
+	destPath := filepath.Join(dlDir, msg.FileName)
 	f, err := os.Create(destPath)
 	if err != nil {
 		log.Printf("[node] create %s: %v", destPath, err)
@@ -965,7 +988,6 @@ func (n *Node) handleFileChunk(msg Message) {
 	}
 	t.hash.Write(plaintext)
 	n.transfers.UpdateProgress(t.ID, t.Progress+int64(len(plaintext)))
-	t.Progress += int64(len(plaintext))
 	n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferProgress}})
 }
 
@@ -1040,6 +1062,17 @@ func (n *Node) onDiscovered(peerID, name string, addr net.IP, port int) {
 		return
 	}
 	go n.dialPeer(peerID, name, addr, port)
+}
+
+// maybeUpdatePeerName updates a peer's display name if it changed, emitting a
+// PeerJoined event so the UI refreshes without waiting for a new connection.
+func (n *Node) maybeUpdatePeerName(peerID, name string) {
+	p := n.peers.Get(peerID)
+	if p == nil || p.Name == name {
+		return
+	}
+	updated, _ := n.peers.Upsert(peerID, name, p.Addr, p.State)
+	n.emit(Event{Peer: &PeerEvent{Peer: updated, Kind: PeerJoined}})
 }
 
 // isZeroKey reports whether a [32]byte key is all zeros (i.e. not yet set).

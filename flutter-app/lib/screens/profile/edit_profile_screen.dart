@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
+import '../../services/piper_service.dart';
 import '../../widgets/app_avatar.dart';
 
 class EditProfileScreen extends StatefulWidget {
@@ -12,9 +14,18 @@ class EditProfileScreen extends StatefulWidget {
 }
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
-  final _ctrl = TextEditingController(text: 'Мой профиль');
+  late final TextEditingController _ctrl;
   final _focus = FocusNode();
-  AvatarStyle _avatar = AvatarStyle.violet;
+  late AvatarStyle _avatar;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final svc = context.read<PiperService>();
+    _ctrl = TextEditingController(text: svc.myName);
+    _avatar = svc.avatarStyle;
+  }
 
   @override
   void dispose() {
@@ -23,12 +34,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     super.dispose();
   }
 
-  bool get _ready => _ctrl.text.trim().isNotEmpty;
+  bool get _ready => _ctrl.text.trim().isNotEmpty && !_saving;
 
-  void _save() {
+  Future<void> _save() async {
     if (!_ready) return;
     _focus.unfocus();
-    Navigator.pop(context);
+    setState(() => _saving = true);
+    await context.read<PiperService>().rename(_ctrl.text.trim(), _avatar);
+    if (mounted) Navigator.pop(context);
   }
 
   String get _initials {
@@ -181,7 +194,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         const SizedBox(height: 40),
 
                         // ── Save button ─────────────────────────────────────
-                        _SaveButton(isReady: _ready, onTap: _save),
+                        _SaveButton(isReady: _ready, loading: _saving, onTap: _save),
 
                         const SizedBox(height: 32),
                       ],
@@ -256,9 +269,10 @@ class _AvatarGrid extends StatelessWidget {
 
 class _SaveButton extends StatefulWidget {
   final bool isReady;
+  final bool loading;
   final VoidCallback onTap;
 
-  const _SaveButton({required this.isReady, required this.onTap});
+  const _SaveButton({required this.isReady, required this.onTap, this.loading = false});
 
   @override
   State<_SaveButton> createState() => _SaveButtonState();
@@ -300,15 +314,24 @@ class _SaveButtonState extends State<_SaveButton> {
                 : null,
           ),
           child: Center(
-            child: Text(
-              'Сохранить',
-              style: GoogleFonts.inter(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: widget.isReady ? Colors.white : AppColors.mutedForeground,
-                letterSpacing: -0.2,
-              ),
-            ),
+            child: widget.loading
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(Colors.white),
+                    ),
+                  )
+                : Text(
+                    'Сохранить',
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: widget.isReady ? Colors.white : AppColors.mutedForeground,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
           ),
         ),
       ),

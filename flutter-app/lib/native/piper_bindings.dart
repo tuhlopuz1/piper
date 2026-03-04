@@ -4,8 +4,11 @@ import 'dart:io' show Platform;
 import 'package:ffi/ffi.dart';
 
 // C function signatures (as defined in bridge.go)
-typedef _CreateNodeC = Int32 Function(Pointer<Utf8> name);
-typedef _CreateNodeDart = int Function(Pointer<Utf8> name);
+typedef _CreateNodeC = Int32 Function(Pointer<Utf8> name, Pointer<Utf8> nodeID);
+typedef _CreateNodeDart = int Function(Pointer<Utf8> name, Pointer<Utf8> nodeID);
+
+typedef _SetNodeNameC = Void Function(Int32 handle, Pointer<Utf8> name);
+typedef _SetNodeNameDart = void Function(int handle, Pointer<Utf8> name);
 
 typedef _StartNodeC = Pointer<Utf8> Function(Int32 handle);
 typedef _StartNodeDart = Pointer<Utf8> Function(int handle);
@@ -50,6 +53,9 @@ typedef EventCallbackC = Void Function(Pointer<Utf8> eventJSON);
 typedef _SetEventCallbackC = Void Function(Int32 handle, Pointer<NativeFunction<EventCallbackC>> cb);
 typedef _SetEventCallbackDart = void Function(int handle, Pointer<NativeFunction<EventCallbackC>> cb);
 
+typedef _SetDownloadsDirC = Void Function(Int32 handle, Pointer<Utf8> dir);
+typedef _SetDownloadsDirDart = void Function(int handle, Pointer<Utf8> dir);
+
 typedef _FreeStringC = Void Function(Pointer<Utf8> s);
 typedef _FreeStringDart = void Function(Pointer<Utf8> s);
 
@@ -71,6 +77,8 @@ class PiperBindings {
   late final _ListPeersDart listPeers;
   late final _ListGroupsDart listGroups;
   late final _SetEventCallbackDart setEventCallback;
+  late final _SetDownloadsDirDart setDownloadsDir;
+  late final _SetNodeNameDart setNodeName;
   late final _FreeStringDart freeString;
 
   PiperBindings({String? libraryPath}) {
@@ -106,6 +114,10 @@ class PiperBindings {
         .lookupFunction<_ListGroupsC, _ListGroupsDart>('PiperListGroups');
     setEventCallback = _lib
         .lookupFunction<_SetEventCallbackC, _SetEventCallbackDart>('PiperSetEventCallback');
+    setDownloadsDir = _lib
+        .lookupFunction<_SetDownloadsDirC, _SetDownloadsDirDart>('PiperSetDownloadsDir');
+    setNodeName = _lib
+        .lookupFunction<_SetNodeNameC, _SetNodeNameDart>('PiperSetNodeName');
     freeString = _lib
         .lookupFunction<_FreeStringC, _FreeStringDart>('PiperFreeString');
   }

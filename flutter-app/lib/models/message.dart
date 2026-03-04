@@ -21,6 +21,7 @@ class Message {
   final String? fileName;
   final String? fileExt;
   final int? fileSize; // bytes
+  final String? filePath; // local path for opening
 
   // voice
   final int? voiceDuration; // seconds
@@ -40,6 +41,7 @@ class Message {
     this.fileName,
     this.fileExt,
     this.fileSize,
+    this.filePath,
     this.voiceDuration,
     required this.time,
     this.delivered = true,

@@ -29,11 +29,14 @@ class PiperNode {
   PiperNode._(this._bindings, this._handle);
 
   /// Create a new node with the given display name.
-  factory PiperNode.create(String name, {String? libraryPath}) {
+  /// If [nodeId] is provided, the node reuses that peer ID across sessions.
+  factory PiperNode.create(String name, {String? nodeId, String? libraryPath}) {
     final bindings = PiperBindings(libraryPath: libraryPath);
     final namePtr = name.toNativeUtf8();
-    final handle = bindings.createNode(namePtr);
+    final idPtr = (nodeId ?? '').toNativeUtf8();
+    final handle = bindings.createNode(namePtr, idPtr);
     malloc.free(namePtr);
+    malloc.free(idPtr);
     return PiperNode._(bindings, handle);
   }
 
@@ -47,6 +50,20 @@ class PiperNode {
       throw Exception('Failed to start node: $err');
     }
     _setupEventCallback();
+  }
+
+  /// Update the display name used in outgoing messages and discovery.
+  void setName(String name) {
+    final ptr = name.toNativeUtf8();
+    _bindings.setNodeName(_handle, ptr);
+    malloc.free(ptr);
+  }
+
+  /// Configure where received files are saved. Call before start().
+  void setDownloadsDir(String path) {
+    final ptr = path.toNativeUtf8();
+    _bindings.setDownloadsDir(_handle, ptr);
+    malloc.free(ptr);
   }
 
   /// Stop the node and release resources.

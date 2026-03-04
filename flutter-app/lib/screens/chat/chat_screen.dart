@@ -1,4 +1,7 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:open_file/open_file.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -49,16 +52,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final svc = context.read<PiperService>();
     if (svc.isRunning) {
-      // PiperService adds optimistically and calls notifyListeners,
-      // which triggers a rebuild via context.watch in build().
-      final groupId = widget.chat.isGroup
-          ? widget.chat.id.replaceFirst('group:', '')
-          : null;
-      svc.sendText(
-        text,
-        toPeerId: widget.chat.isGroup ? null : widget.chat.id,
-        groupId: groupId,
-      );
+      if (widget.chat.id == 'global') {
+        // Broadcast to all peers
+        svc.sendText(text);
+      } else if (widget.chat.isGroup) {
+        final groupId = widget.chat.id.replaceFirst('group:', '');
+        svc.sendText(text, groupId: groupId);
+      } else {
+        svc.sendText(text, toPeerId: widget.chat.id);
+      }
       setState(() => _showAttach = false);
     } else {
       // Demo / no-backend mode: update local state only.
@@ -86,6 +88,35 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  Future<void> _pickAndSendFile({bool imageOnly = false}) async {
+    setState(() => _showAttach = false);
+    final result = await FilePicker.platform.pickFiles(
+      type: imageOnly ? FileType.image : FileType.any,
+    );
+    if (!mounted || result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.path == null) return;
+
+    final svc = context.read<PiperService>();
+    if (!svc.isRunning) return;
+
+    final chatId = widget.chat.id;
+    if (widget.chat.isGroup && chatId != 'global') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Отправка файлов в группы пока не поддерживается')),
+      );
+      return;
+    }
+    if (chatId == 'global') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Отправка файлов в общий чат не поддерживается')),
+      );
+      return;
+    }
+
+    svc.sendFile(chatId, file.path!);
+  }
+
   void _startRecording() => setState(() => _isRecording = true);
   void _cancelRecording() => setState(() { _isRecording = false; _recordSeconds = 0; });
   void _sendVoice() {
@@ -108,7 +139,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final svc = context.watch<PiperService>();
     final displayMessages = svc.isRunning
-        ? (svc.messages[widget.chat.id] ?? _messages)
+        ? (svc.messages[widget.chat.id] ?? [])
         : _messages;
 
     return Scaffold(
@@ -137,7 +168,12 @@ class _ChatScreenState extends State<ChatScreen> {
               onSend: _sendText,
               onMicStart: _startRecording,
             ),
-          if (_showAttach) _AttachPanel(onClose: () => setState(() => _showAttach = false)),
+          if (_showAttach)
+            _AttachPanel(
+              onClose: () => setState(() => _showAttach = false),
+              onFilePick: () => _pickAndSendFile(),
+              onPhotoPick: () => _pickAndSendFile(imageOnly: true),
+            ),
         ],
       ),
     );
@@ -153,6 +189,23 @@ class _ChatAppBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
+    final svc = context.watch<PiperService>();
+
+    final bool isOnline;
+    final String statusText;
+    if (chat.id == 'global') {
+      final onlineCount = svc.peers.where((p) => p.isConnected).length;
+      isOnline = onlineCount > 0;
+      statusText = '${onlineCount + 1} участников';
+    } else if (chat.isGroup) {
+      isOnline = false;
+      statusText = 'Группа';
+    } else {
+      final peer = svc.peers.where((p) => p.id == chat.id).firstOrNull;
+      isOnline = peer?.isConnected ?? false;
+      statusText = isOnline ? 'В сети' : 'Не в сети';
+    }
+
     return Container(
       padding: EdgeInsets.fromLTRB(8, top + 8, 8, 8),
       decoration: BoxDecoration(
@@ -191,8 +244,11 @@ class _ChatAppBar extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          'В сети',
-                          style: GoogleFonts.inter(fontSize: 12, color: AppColors.online),
+                          statusText,
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            color: isOnline ? AppColors.online : AppColors.mutedForeground,
+                          ),
                         ),
                       ],
                     ),
@@ -394,7 +450,8 @@ class _BubbleContent extends StatelessWidget {
       case MsgType.image:
         content = _ImageContent(message: message, radius: radius);
       case MsgType.file:
-        content = _FileContent(message: message, bg: bg, fg: fg, radius: radius);
+        final progress = context.read<PiperService>().progressByMsgId[message.id];
+        content = _FileContent(message: message, bg: bg, fg: fg, radius: radius, transferProgress: progress);
       case MsgType.voice:
         content = _VoiceContent(message: message, bg: bg, fg: fg, radius: radius);
     }
@@ -471,7 +528,15 @@ class _FileContent extends StatelessWidget {
   final Message message;
   final Color bg, fg;
   final BorderRadius radius;
-  const _FileContent({required this.message, required this.bg, required this.fg, required this.radius});
+  final double? transferProgress; // null = not transferring, 0.0-1.0 = in progress
+
+  const _FileContent({
+    required this.message,
+    required this.bg,
+    required this.fg,
+    required this.radius,
+    this.transferProgress,
+  });
 
   String _formatSize(int bytes) {
     if (bytes < 1024) return '$bytes B';
@@ -481,60 +546,102 @@ class _FileContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(color: bg, borderRadius: radius),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: fg.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Center(
-              child: Text(
-                (message.fileExt ?? 'file').toUpperCase(),
-                style: GoogleFonts.inter(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  color: fg.withValues(alpha: 0.8),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    final canOpen = message.filePath != null && transferProgress == null;
+    return GestureDetector(
+      onTap: canOpen ? () => OpenFile.open(message.filePath!) : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(color: bg, borderRadius: radius),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  message.fileName ?? 'file',
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: fg,
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: fg.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  overflow: TextOverflow.ellipsis,
+                  child: transferProgress != null
+                      ? Center(
+                          child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              value: transferProgress,
+                              strokeWidth: 2.5,
+                              color: fg.withValues(alpha: 0.8),
+                              backgroundColor: fg.withValues(alpha: 0.15),
+                            ),
+                          ),
+                        )
+                      : Center(
+                          child: Text(
+                            (message.fileExt ?? 'FILE').toUpperCase(),
+                            style: GoogleFonts.inter(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              color: fg.withValues(alpha: 0.8),
+                            ),
+                          ),
+                        ),
                 ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    if (message.fileSize != null)
+                const SizedBox(width: 10),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        _formatSize(message.fileSize!),
-                        style: GoogleFonts.inter(fontSize: 11, color: fg.withValues(alpha: 0.6)),
+                        message.fileName ?? 'file',
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: fg,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    const Spacer(),
-                    _TimeRow(message: message, fg: fg.withValues(alpha: 0.6)),
-                  ],
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          if (message.fileSize != null)
+                            Text(
+                              _formatSize(message.fileSize!),
+                              style: GoogleFonts.inter(fontSize: 11, color: fg.withValues(alpha: 0.6)),
+                            ),
+                          const Spacer(),
+                          _TimeRow(message: message, fg: fg.withValues(alpha: 0.6)),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
-          ),
-        ],
+            if (transferProgress != null) ...[
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: transferProgress,
+                  minHeight: 3,
+                  color: fg.withValues(alpha: 0.75),
+                  backgroundColor: fg.withValues(alpha: 0.15),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  '${((transferProgress!) * 100).toStringAsFixed(0)}%',
+                  style: GoogleFonts.inter(fontSize: 10, color: fg.withValues(alpha: 0.55)),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -649,7 +756,7 @@ class _TimeRow extends StatelessWidget {
 
 // ─── Input Bar ────────────────────────────────────────────────────────────────
 
-class _InputBar extends StatelessWidget {
+class _InputBar extends StatefulWidget {
   final TextEditingController controller;
   final bool showAttach;
   final VoidCallback onAttachToggle;
@@ -665,6 +772,33 @@ class _InputBar extends StatelessWidget {
   });
 
   @override
+  State<_InputBar> createState() => _InputBarState();
+}
+
+class _InputBarState extends State<_InputBar> {
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode(onKeyEvent: (node, event) {
+      if (event is KeyDownEvent &&
+          event.logicalKey == LogicalKeyboardKey.enter &&
+          !HardwareKeyboard.instance.isShiftPressed) {
+        widget.onSend();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       padding: EdgeInsets.fromLTRB(8, 8, 8, MediaQuery.of(context).padding.bottom + 8),
@@ -676,12 +810,12 @@ class _InputBar extends StatelessWidget {
         children: [
           IconButton(
             icon: AnimatedRotation(
-              turns: showAttach ? 0.125 : 0,
+              turns: widget.showAttach ? 0.125 : 0,
               duration: const Duration(milliseconds: 200),
               child: const Icon(Icons.add_circle_outline_rounded),
             ),
             color: AppColors.mutedForeground,
-            onPressed: onAttachToggle,
+            onPressed: widget.onAttachToggle,
           ),
           Expanded(
             child: Container(
@@ -692,7 +826,8 @@ class _InputBar extends StatelessWidget {
                 border: Border.all(color: AppColors.border, width: 0.5),
               ),
               child: TextField(
-                controller: controller,
+                controller: widget.controller,
+                focusNode: _focusNode,
                 style: GoogleFonts.inter(fontSize: 14, color: AppColors.foreground),
                 maxLines: null,
                 decoration: InputDecoration(
@@ -706,11 +841,11 @@ class _InputBar extends StatelessWidget {
           ),
           const SizedBox(width: 4),
           ValueListenableBuilder(
-            valueListenable: controller,
+            valueListenable: widget.controller,
             builder: (_, val, __) {
               final hasText = val.text.trim().isNotEmpty;
               return GestureDetector(
-                onTap: hasText ? onSend : onMicStart,
+                onTap: hasText ? widget.onSend : widget.onMicStart,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 180),
                   width: 44,
@@ -740,17 +875,24 @@ class _InputBar extends StatelessWidget {
 
 class _AttachPanel extends StatelessWidget {
   final VoidCallback onClose;
-  const _AttachPanel({required this.onClose});
+  final VoidCallback onFilePick;
+  final VoidCallback onPhotoPick;
 
-  static const _items = [
-    (Icons.image_outlined, 'Фото'),
-    (Icons.folder_outlined, 'Файл'),
-    (Icons.camera_alt_outlined, 'Камера'),
-    (Icons.location_on_outlined, 'Геопозиция'),
-  ];
+  const _AttachPanel({
+    required this.onClose,
+    required this.onFilePick,
+    required this.onPhotoPick,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final items = [
+      (Icons.image_outlined,    'Фото',       onPhotoPick),
+      (Icons.folder_outlined,   'Файл',       onFilePick),
+      (Icons.camera_alt_outlined, 'Камера',   null),
+      (Icons.location_on_outlined, 'Геопозиция', null),
+    ];
+
     return Container(
       padding: EdgeInsets.fromLTRB(20, 16, 20, MediaQuery.of(context).padding.bottom + 16),
       decoration: BoxDecoration(
@@ -759,10 +901,10 @@ class _AttachPanel extends StatelessWidget {
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: _items.indexed.map((entry) {
+        children: items.indexed.map((entry) {
           final (i, item) = entry;
-          final (icon, label) = item;
-          return _AttachItem(icon: icon, label: label)
+          final (icon, label, onTap) = item;
+          return _AttachItem(icon: icon, label: label, onTap: onTap)
               .animate(delay: Duration(milliseconds: i * 40))
               .fadeIn(duration: 200.ms)
               .scale(begin: const Offset(0.7, 0.7), end: const Offset(1, 1), duration: 200.ms, curve: Curves.easeOutBack);
@@ -775,29 +917,36 @@ class _AttachPanel extends StatelessWidget {
 class _AttachItem extends StatelessWidget {
   final IconData icon;
   final String label;
-  const _AttachItem({required this.icon, required this.label});
+  final VoidCallback? onTap;
+  const _AttachItem({required this.icon, required this.label, this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 54,
-          height: 54,
-          decoration: BoxDecoration(
-            color: AppColors.primary.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.primary.withValues(alpha: 0.2), width: 0.5),
-          ),
-          child: Icon(icon, color: AppColors.primaryLight, size: 24),
+    return GestureDetector(
+      onTap: onTap,
+      child: Opacity(
+        opacity: onTap != null ? 1.0 : 0.4,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.2), width: 0.5),
+              ),
+              child: Icon(icon, color: AppColors.primaryLight, size: 24),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: GoogleFonts.inter(fontSize: 11, color: AppColors.mutedForeground),
+            ),
+          ],
         ),
-        const SizedBox(height: 6),
-        Text(
-          label,
-          style: GoogleFonts.inter(fontSize: 11, color: AppColors.mutedForeground),
-        ),
-      ],
+      ),
     );
   }
 }
