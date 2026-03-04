@@ -2,8 +2,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../../theme/app_theme.dart';
 import '../../../models/chat.dart';
+import '../../../services/piper_service.dart';
 import '../../../widgets/app_avatar.dart';
 import '../../contacts/contact_info_screen.dart';
 import '../../chat/chat_screen.dart';
@@ -44,9 +46,6 @@ class _ContactsTabState extends State<ContactsTab>
     });
   }
 
-  List<Contact> get _online => mockContacts.where((c) => c.isOnline).toList();
-  List<Contact> get _offline => mockContacts.where((c) => !c.isOnline).toList();
-
   Chat _contactToChat(Contact c) => Chat(
         id: c.id,
         name: c.name,
@@ -62,6 +61,11 @@ class _ContactsTabState extends State<ContactsTab>
 
   @override
   Widget build(BuildContext context) {
+    final svc = context.watch<PiperService>();
+    final all = svc.isRunning ? svc.contacts : mockContacts;
+    final online = all.where((c) => c.isOnline).toList();
+    final offline = all.where((c) => !c.isOnline).toList();
+
     final top = MediaQuery.of(context).padding.top;
 
     return Scaffold(
@@ -103,95 +107,95 @@ class _ContactsTabState extends State<ContactsTab>
                 child: Center(
                   child: _RadarWidget(
                     controller: _radarCtrl,
-                    contacts: _online,
+                    contacts: online,
                   ),
                 ),
               ),
             ),
 
             // ── Online section ──────────────────────────────────────────────
-            if (_online.isNotEmpty) ...[
+            if (online.isNotEmpty) ...[
               SliverToBoxAdapter(
                 child: _SectionLabel(
-                  label: 'В СЕТИ · ${_online.length}',
+                  label: 'В СЕТИ · ${online.length}',
                   color: AppColors.online,
                 ),
               ),
               SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (_, i) => _DeviceTile(
-                    contact: _online[i],
+                    contact: online[i],
                     onCall: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => VoiceCallScreen(chat: _contactToChat(_online[i])),
+                        builder: (_) => VoiceCallScreen(chat: _contactToChat(online[i])),
                       ),
                     ),
                     onVideo: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => VideoCallScreen(chat: _contactToChat(_online[i])),
+                        builder: (_) => VideoCallScreen(chat: _contactToChat(online[i])),
                       ),
                     ),
                     onChat: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => ChatScreen(chat: _contactToChat(_online[i])),
+                        builder: (_) => ChatScreen(chat: _contactToChat(online[i])),
                       ),
                     ),
                     onInfo: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => ContactInfoScreen(chat: _contactToChat(_online[i])),
+                        builder: (_) => ContactInfoScreen(chat: _contactToChat(online[i])),
                       ),
                     ),
                   )
                       .animate(delay: Duration(milliseconds: i * 60))
                       .fadeIn(duration: 300.ms)
                       .slideX(begin: -0.05, end: 0, duration: 300.ms),
-                  childCount: _online.length,
+                  childCount: online.length,
                 ),
               ),
             ],
 
             // ── Offline section ─────────────────────────────────────────────
-            if (_offline.isNotEmpty) ...[
+            if (offline.isNotEmpty) ...[
               SliverToBoxAdapter(
-                child: _SectionLabel(label: 'НЕ В СЕТИ · ${_offline.length}'),
+                child: _SectionLabel(label: 'НЕ В СЕТИ · ${offline.length}'),
               ),
               SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (_, i) => _DeviceTile(
-                    contact: _offline[i],
+                    contact: offline[i],
                     dimmed: true,
                     onCall: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => VoiceCallScreen(chat: _contactToChat(_offline[i])),
+                        builder: (_) => VoiceCallScreen(chat: _contactToChat(offline[i])),
                       ),
                     ),
                     onVideo: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => VideoCallScreen(chat: _contactToChat(_offline[i])),
+                        builder: (_) => VideoCallScreen(chat: _contactToChat(offline[i])),
                       ),
                     ),
                     onChat: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => ChatScreen(chat: _contactToChat(_offline[i])),
+                        builder: (_) => ChatScreen(chat: _contactToChat(offline[i])),
                       ),
                     ),
                     onInfo: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => ContactInfoScreen(chat: _contactToChat(_offline[i])),
+                        builder: (_) => ContactInfoScreen(chat: _contactToChat(offline[i])),
                       ),
                     ),
                   )
                       .animate(delay: Duration(milliseconds: i * 60))
                       .fadeIn(duration: 300.ms),
-                  childCount: _offline.length,
+                  childCount: offline.length,
                 ),
               ),
             ],

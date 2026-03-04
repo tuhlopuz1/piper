@@ -13,3 +13,14 @@
 2026/03/04 00:48:47 [node] file "5" accepted by DESKTOP-0D8CF7J
 2026/03/04 00:48:47 [node] file "5" sent to 4a7abea1 (hash=2170430619910398)
 2026/03/04 00:49:05 [node] read from 4a7abea1: read len: read tcp 192.168.1.210:65524->192.168.1.200:56046: wsarecv: An existing connection was forcibly closed by the remote host.
+2026/03/04 11:14:43 [node] listening on :64030 (id=f64484f0-1537-4a83-8909-8c8c5885d0a5)
+2026/03/04 11:19:23 [node] ECDH shared key established with DESKTOP-MB879JA (9395f446)
+2026/03/04 11:19:25 [node] dial 192.168.43.105:53313: dial tcp 192.168.43.105:53313: i/o timeout
+2026/03/04 11:22:41 [node] listening on :49707 (id=d8eff24e-9806-41cd-ab5a-6f2829e737b6)
+2026/03/04 11:22:41 [node] ECDH shared key established with DESKTOP-MB879JA (9395f446)
+2026/03/04 11:22:41 [node] ECDH shared key established with debian (dd08df6b)
+2026/03/04 11:22:47 [node] received invite to group "12345" from DESKTOP-MB879JA
+2026/03/04 11:23:16 [node] accepted file "7.exe" (8451072 bytes) from DESKTOP-MB879JA
+2026/03/04 11:23:22 [node] file "7.exe" received from DESKTOP-MB879JA (hash=0ff8cfbded41cd72)
+2026/03/04 11:24:47 [node] read from dd08df6b: read len: read tcp 192.168.43.63:49707->192.168.43.67:58798: wsarecv: A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+2026/03/04 11:44:03 [node] listening on :61514 (id=d68f91b7-c376-4d59-8529-08f3ccdb6103)

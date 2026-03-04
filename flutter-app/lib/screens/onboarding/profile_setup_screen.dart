@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
+import '../../services/piper_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../home/home_screen.dart';
 
@@ -32,18 +35,32 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     super.dispose();
   }
 
-  void _done() {
-    if (!_ready) return;
+  bool _loading = false;
+
+  Future<void> _done() async {
+    if (!_ready || _loading) return;
     _focus.unfocus();
-    Navigator.pushReplacement(
-      context,
-      PageRouteBuilder(
-        pageBuilder: (_, __, ___) => const HomeScreen(),
-        transitionsBuilder: (_, anim, __, child) =>
-            FadeTransition(opacity: anim, child: child),
-        transitionDuration: const Duration(milliseconds: 450),
-      ),
-    );
+    setState(() => _loading = true);
+
+    final name = _ctrl.text.trim();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_name', name);
+
+    if (mounted) {
+      await context.read<PiperService>().init(name);
+    }
+
+    if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) => const HomeScreen(),
+          transitionsBuilder: (_, anim, __, child) =>
+              FadeTransition(opacity: anim, child: child),
+          transitionDuration: const Duration(milliseconds: 450),
+        ),
+      );
+    }
   }
 
   String get _initials {
@@ -186,7 +203,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                   const SizedBox(height: 52),
 
                   // ── Done button ─────────────────────────────────────────────
-                  _DoneButton(isReady: _ready, onTap: _done)
+                  _DoneButton(isReady: _ready && !_loading, loading: _loading, onTap: _done)
                       .animate(delay: 400.ms)
                       .fadeIn(duration: 400.ms)
                       .slideY(begin: 0.2, end: 0, duration: 400.ms),
@@ -261,9 +278,10 @@ class _AvatarGrid extends StatelessWidget {
 
 class _DoneButton extends StatefulWidget {
   final bool isReady;
+  final bool loading;
   final VoidCallback onTap;
 
-  const _DoneButton({required this.isReady, required this.onTap});
+  const _DoneButton({required this.isReady, required this.onTap, this.loading = false});
 
   @override
   State<_DoneButton> createState() => _DoneButtonState();
@@ -305,17 +323,26 @@ class _DoneButtonState extends State<_DoneButton> {
                 : null,
           ),
           child: Center(
-            child: Text(
-              'Готово',
-              style: GoogleFonts.inter(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: widget.isReady
-                    ? Colors.white
-                    : AppColors.mutedForeground,
-                letterSpacing: -0.2,
-              ),
-            ),
+            child: widget.loading
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(Colors.white),
+                    ),
+                  )
+                : Text(
+                    'Готово',
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: widget.isReady
+                          ? Colors.white
+                          : AppColors.mutedForeground,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
           ),
         ),
       ),

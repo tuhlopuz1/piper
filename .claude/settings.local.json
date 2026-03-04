@@ -1,7 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(go build ./cmd/claudemess/)"
+      "Bash(go build ./cmd/claudemess/)",
+      "Bash(objdump -p \"C:/ProgramData/mingw64/mingw64/libexec/gcc/x86_64-w64-mingw32/15.2.0/cc1.exe\")",
+      "Bash(cmd /c \"\"\"C:\\\\ProgramData\\\\mingw64\\\\mingw64\\\\libexec\\\\gcc\\\\x86_64-w64-mingw32\\\\15.2.0\\\\cc1.exe\"\" --version && echo OK\")",
+      "Bash(PATH=\"C:/Windows/System32/downlevel:C:/ProgramData/mingw64/mingw64/bin:$PATH\")",
+      "Bash(export PATH)",
+      "Bash(CGO_ENABLED=1 go build -buildmode=c-shared -o ../flutter-app/windows/runner/libpiper.dll ./ffi/)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(export PATH=\"C:/Windows/System32/downlevel:C:/ProgramData/mingw64/mingw64/bin:$PATH\")",
+      "Bash(\"C:/ProgramData/mingw64/mingw64/libexec/gcc/x86_64-w64-mingw32/15.2.0/cc1.exe\" --version)",
+      "Bash(echo \"cc1 exit: $?\")",
+      "Bash(ls \"C:/Windows/System32/\"api-ms-win-crt*.dll)",
+      "Bash(ls \"C:/Windows/System32/downlevel/\"api-ms-win-crt-private*.dll)",
+      "Bash(flutter pub get)",
+      "Bash(flutter build windows --debug)"
     ]
   }
 }

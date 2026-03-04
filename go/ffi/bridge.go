@@ -2,6 +2,7 @@ package main
 
 // #include <stdlib.h>
 // typedef void (*EventCallback)(const char* eventJSON);
+// static void callEventCallback(EventCallback cb, const char* json) { cb(json); }
 import "C"
 
 import (
@@ -288,7 +289,7 @@ func eventPump(e *nodeEntry) {
 				continue
 			}
 			cstr := C.CString(string(data))
-			C.EventCallback(e.cb)(cstr)
+			C.callEventCallback(e.cb, cstr)
 			C.free(unsafe.Pointer(cstr))
 		}
 	}

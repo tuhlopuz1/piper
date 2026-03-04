@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../../theme/app_theme.dart';
 import '../../../models/chat.dart';
+import '../../../services/piper_service.dart';
 import '../../../services/theme_notifier.dart';
 import '../../../widgets/app_avatar.dart';
 import '../../profile/edit_profile_screen.dart';
@@ -13,6 +15,7 @@ class SettingsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final svc = context.watch<PiperService>();
     final top = MediaQuery.of(context).padding.top;
 
     return Scaffold(
@@ -65,7 +68,9 @@ class SettingsTab extends StatelessWidget {
                     children: [
                       AppAvatar(
                         style: AvatarStyle.violet,
-                        initials: 'ME',
+                        initials: svc.myName.isNotEmpty
+                            ? svc.myName.substring(0, svc.myName.length.clamp(0, 2)).toUpperCase()
+                            : 'ME',
                         size: 54,
                       ),
                       const SizedBox(width: 14),
@@ -74,7 +79,7 @@ class SettingsTab extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Мой профиль',
+                              svc.myName.isNotEmpty ? svc.myName : 'Мой профиль',
                               style: GoogleFonts.inter(
                                 fontSize: 17,
                                 fontWeight: FontWeight.w700,
@@ -87,17 +92,24 @@ class SettingsTab extends StatelessWidget {
                                 Container(
                                   width: 6,
                                   height: 6,
-                                  decoration: const BoxDecoration(
-                                    color: AppColors.online,
+                                  decoration: BoxDecoration(
+                                    color: svc.isRunning ? AppColors.online : AppColors.border,
                                     shape: BoxShape.circle,
                                   ),
                                 ),
                                 const SizedBox(width: 5),
-                                Text(
-                                  'В сети · 192.168.1.5',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 12,
-                                    color: AppColors.mutedForeground,
+                                Flexible(
+                                  child: Text(
+                                    svc.isRunning
+                                        ? 'В сети · ${svc.myId.length > 12 ? svc.myId.substring(0, 12) : svc.myId}'
+                                        : svc.initError != null
+                                            ? 'Ошибка подключения'
+                                            : 'Не подключено',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 12,
+                                      color: AppColors.mutedForeground,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
                               ],

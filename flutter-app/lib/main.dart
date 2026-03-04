@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'theme/app_theme.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'services/piper_service.dart';
 import 'services/theme_notifier.dart';
+import 'theme/app_theme.dart';
 import 'screens/onboarding/onboarding_screen.dart';
+import 'screens/home/home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,11 +21,25 @@ void main() async {
     ),
   );
 
-  runApp(const PiperApp());
+  final prefs = await SharedPreferences.getInstance();
+  final savedName = prefs.getString('user_name');
+
+  final piperService = PiperService();
+  if (savedName != null && savedName.isNotEmpty) {
+    await piperService.init(savedName);
+  }
+
+  runApp(
+    ChangeNotifierProvider.value(
+      value: piperService,
+      child: PiperApp(skipOnboarding: savedName != null && savedName.isNotEmpty),
+    ),
+  );
 }
 
 class PiperApp extends StatefulWidget {
-  const PiperApp({super.key});
+  final bool skipOnboarding;
+  const PiperApp({super.key, this.skipOnboarding = false});
 
   @override
   State<PiperApp> createState() => _PiperAppState();
@@ -49,7 +68,7 @@ class _PiperAppState extends State<PiperApp> {
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: ThemeNotifier.instance.mode.value,
-      home: const OnboardingScreen(),
+      home: widget.skipOnboarding ? const HomeScreen() : const OnboardingScreen(),
     );
   }
 }

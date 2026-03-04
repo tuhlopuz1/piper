@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
 import '../../models/message.dart';
+import '../../services/piper_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../call/voice_call_screen.dart';
 import '../call/video_call_screen.dart';
@@ -43,18 +45,36 @@ class _ChatScreenState extends State<ChatScreen> {
   void _sendText() {
     final text = _textCtrl.text.trim();
     if (text.isEmpty) return;
-    setState(() {
-      _messages.add(Message(
-        id: 'new_${DateTime.now().millisecondsSinceEpoch}',
-        isMe: true,
-        type: MsgType.text,
-        text: text,
-        time: DateTime.now(),
-        delivered: false,
-      ));
-      _textCtrl.clear();
-      _showAttach = false;
-    });
+    _textCtrl.clear();
+
+    final svc = context.read<PiperService>();
+    if (svc.isRunning) {
+      // PiperService adds optimistically and calls notifyListeners,
+      // which triggers a rebuild via context.watch in build().
+      final groupId = widget.chat.isGroup
+          ? widget.chat.id.replaceFirst('group:', '')
+          : null;
+      svc.sendText(
+        text,
+        toPeerId: widget.chat.isGroup ? null : widget.chat.id,
+        groupId: groupId,
+      );
+      setState(() => _showAttach = false);
+    } else {
+      // Demo / no-backend mode: update local state only.
+      setState(() {
+        _messages.add(Message(
+          id: 'new_${DateTime.now().millisecondsSinceEpoch}',
+          isMe: true,
+          type: MsgType.text,
+          text: text,
+          time: DateTime.now(),
+          delivered: false,
+        ));
+        _showAttach = false;
+      });
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
         _scrollCtrl.animateTo(
@@ -86,6 +106,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final svc = context.watch<PiperService>();
+    final displayMessages = svc.isRunning
+        ? (svc.messages[widget.chat.id] ?? _messages)
+        : _messages;
+
     return Scaffold(
       backgroundColor: AppColors.bgBase,
       body: Column(
@@ -93,7 +118,7 @@ class _ChatScreenState extends State<ChatScreen> {
           _ChatAppBar(chat: widget.chat),
           Expanded(
             child: _MessageList(
-              messages: _messages,
+              messages: displayMessages,
               scrollCtrl: _scrollCtrl,
               chat: widget.chat,
             ),

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../../theme/app_theme.dart';
 import '../../../models/chat.dart';
+import '../../../services/piper_service.dart';
 import '../../../widgets/chat_item.dart';
 import '../../search/search_screen.dart';
 
@@ -14,17 +16,19 @@ class ChatsTab extends StatefulWidget {
 }
 
 class _ChatsTabState extends State<ChatsTab> {
-  final List<Chat> _filtered = mockChats;
-
   @override
   Widget build(BuildContext context) {
+    final svc = context.watch<PiperService>();
+    // Use real chats when the node is running, fall back to mock for UI preview
+    final chats = svc.isRunning ? svc.chats : mockChats;
+
     return Scaffold(
       backgroundColor: AppColors.bgBase,
       body: CustomScrollView(
         slivers: [
           _buildHeader(),
-          _buildSectionLabel(),
-          _buildList(),
+          _buildSectionLabel(chats),
+          _buildList(chats),
           const SliverToBoxAdapter(child: SizedBox(height: 88)),
         ],
       ),
@@ -63,12 +67,12 @@ class _ChatsTabState extends State<ChatsTab> {
     );
   }
 
-  SliverToBoxAdapter _buildSectionLabel() {
+  SliverToBoxAdapter _buildSectionLabel(List<Chat> chats) {
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
         child: Text(
-          'НЕДАВНИЕ · ${_filtered.length}',
+          'НЕДАВНИЕ · ${chats.length}',
           style: GoogleFonts.inter(
             fontSize: 11,
             fontWeight: FontWeight.w600,
@@ -80,11 +84,11 @@ class _ChatsTabState extends State<ChatsTab> {
     );
   }
 
-  SliverList _buildList() {
+  SliverList _buildList(List<Chat> chats) {
     return SliverList(
       delegate: SliverChildBuilderDelegate(
         (ctx, i) {
-          if (_filtered.isEmpty) {
+          if (chats.isEmpty) {
             return Padding(
               padding: const EdgeInsets.only(top: 60),
               child: Column(
@@ -101,7 +105,7 @@ class _ChatsTabState extends State<ChatsTab> {
               ),
             );
           }
-          final chat = _filtered[i];
+          final chat = chats[i];
           return ChatItem(chat: chat)
               .animate(delay: Duration(milliseconds: i * 35))
               .fadeIn(duration: 380.ms)
@@ -111,7 +115,7 @@ class _ChatsTabState extends State<ChatsTab> {
                   duration: 380.ms,
                   curve: Curves.easeOutCubic);
         },
-        childCount: _filtered.isEmpty ? 1 : _filtered.length,
+        childCount: chats.isEmpty ? 1 : chats.length,
       ),
     );
   }

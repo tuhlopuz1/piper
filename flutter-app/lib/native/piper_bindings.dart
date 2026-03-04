@@ -1,6 +1,8 @@
 import 'dart:ffi';
 import 'dart:io' show Platform;
 
+import 'package:ffi/ffi.dart';
+
 // C function signatures (as defined in bridge.go)
 typedef _CreateNodeC = Int32 Function(Pointer<Utf8> name);
 typedef _CreateNodeDart = int Function(Pointer<Utf8> name);
@@ -110,7 +112,7 @@ class PiperBindings {
 
   static String _defaultLibPath() {
     if (Platform.isWindows) return 'libpiper.dll';
-    if (Platform.isLinux) return 'libpiper.so';
+    if (Platform.isLinux || Platform.isAndroid) return 'libpiper.so';
     if (Platform.isMacOS) return 'libpiper.dylib';
     throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
   }
