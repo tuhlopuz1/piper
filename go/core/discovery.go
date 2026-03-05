@@ -108,7 +108,7 @@ func (d *Discovery) browseMDNS(ctx context.Context) {
 	entries := make(chan *zeroconf.ServiceEntry, 16)
 	go func() {
 		for entry := range entries {
-			id, name := d.peerID, entry.HostName
+			id, name := "", entry.HostName
 			for _, txt := range entry.Text {
 				if len(txt) > 3 && txt[:3] == "id=" {
 					id = txt[3:]
@@ -117,8 +117,8 @@ func (d *Discovery) browseMDNS(ctx context.Context) {
 					name = txt[5:]
 				}
 			}
-			if id == d.peerID {
-				continue // ourselves
+			if id == "" || id == d.peerID {
+				continue // no id in TXT or ourselves
 			}
 			ip := firstIP(entry.AddrIPv4, entry.AddrIPv6)
 			if ip == nil {

@@ -1,4 +1,5 @@
 /// Event types received from the Go backend via FFI callback.
+library;
 
 class PiperEvent {
   final String type; // "message", "peer", "group", "transfer"

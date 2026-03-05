@@ -4,6 +4,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../native/piper_events.dart';
@@ -27,6 +28,9 @@ class CallService extends ChangeNotifier {
   /// Non-null when the last call attempt failed with an error.
   String? callError;
 
+  /// Guard against re-entrant endCall() (e.g. from onIceConnectionState during cleanup).
+  bool _ending = false;
+
   String? selectedMicId;
   String? selectedCameraId;
   String? selectedSpeakerId;
@@ -34,6 +38,7 @@ class CallService extends ChangeNotifier {
   RTCPeerConnection? _pc;
   final localRenderer = RTCVideoRenderer();
   final remoteRenderer = RTCVideoRenderer();
+  bool _renderersReady = false;
   MediaStream? _localStream;
   final _pendingIce = <RTCIceCandidate>[];
   RTCSessionDescription? _incomingOffer;
@@ -54,8 +59,10 @@ class CallService extends ChangeNotifier {
   }
 
   Future<void> initRenderers() async {
+    if (_renderersReady) return;
     await localRenderer.initialize();
     await remoteRenderer.initialize();
+    _renderersReady = true;
   }
 
   // ── Outgoing call ───────────────────────────────────────────────────────────
@@ -68,6 +75,12 @@ class CallService extends ChangeNotifier {
     notifyListeners();
 
     try {
+      if (!await _requestPermissions(isVideo)) {
+        callError = 'Microphone${isVideo ? " and camera" : ""} permission denied';
+        state = CallState.idle;
+        notifyListeners();
+        return;
+      }
       await _setupPeerConnection();
       _localStream = await _getUserMedia(isVideo);
       for (final t in _localStream!.getTracks()) {
@@ -128,14 +141,18 @@ class CallService extends ChangeNotifier {
         }
 
       case 'call_reject':
-        await _cleanup();
-        state = CallState.idle;
-        notifyListeners();
+        if (!_ending && state != CallState.idle) {
+          await _cleanup();
+          state = CallState.idle;
+          notifyListeners();
+        }
 
       case 'call_end':
-        await _cleanup();
-        state = CallState.idle;
-        notifyListeners();
+        if (!_ending && state != CallState.idle) {
+          await _cleanup();
+          state = CallState.idle;
+          notifyListeners();
+        }
 
       case 'call_ice':
         try {
@@ -158,6 +175,16 @@ class CallService extends ChangeNotifier {
   // ── Accept incoming call ────────────────────────────────────────────────────
   Future<void> acceptCall() async {
     try {
+      if (!await _requestPermissions(isVideoCall)) {
+        callError = 'Microphone${isVideoCall ? " and camera" : ""} permission denied';
+        try {
+          _piperNode.sendCallSignal(peerId!, 'call_reject', '{}');
+        } catch (_) {}
+        await _cleanup();
+        state = CallState.idle;
+        notifyListeners();
+        return;
+      }
       await _setupPeerConnection();
       _localStream = await _getUserMedia(isVideoCall);
       for (final t in _localStream!.getTracks()) {
@@ -201,6 +228,8 @@ class CallService extends ChangeNotifier {
   }
 
   Future<void> endCall() async {
+    if (_ending || state == CallState.idle) return;
+    _ending = true;
     try {
       if (peerId != null) {
         _piperNode.sendCallSignal(peerId!, 'call_end', '{}');
@@ -208,6 +237,7 @@ class CallService extends ChangeNotifier {
     } catch (_) {}
     await _cleanup();
     state = CallState.idle;
+    _ending = false;
     notifyListeners();
   }
 
@@ -283,7 +313,19 @@ class CallService extends ChangeNotifier {
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────
+
+  /// Request microphone (and optionally camera) permissions on Android/iOS.
+  /// Returns true if all needed permissions are granted.
+  Future<bool> _requestPermissions(bool needCamera) async {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) return true;
+    final perms = <Permission>[Permission.microphone];
+    if (needCamera) perms.add(Permission.camera);
+    final statuses = await perms.request();
+    return statuses.values.every((s) => s.isGranted);
+  }
+
   Future<void> _setupPeerConnection() async {
+    await initRenderers();
     _pc = await createPeerConnection(_rtcConfig);
     _pc!.onIceCandidate = (c) {
       if (c.candidate == null) return;
@@ -311,8 +353,8 @@ class CallService extends ChangeNotifier {
           _startTimer();
           notifyListeners();
         }
-      } else if (s == RTCIceConnectionState.RTCIceConnectionStateFailed ||
-          s == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+      } else if (s == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        // Only end on failed — disconnected is transient and fires during cleanup.
         endCall();
       }
     };
@@ -358,10 +400,17 @@ class CallService extends ChangeNotifier {
     }
     _localStream?.dispose();
     _localStream = null;
-    try {
-      await _pc?.close();
-    } catch (_) {}
+    // Detach event handlers before closing to prevent callbacks during teardown.
+    final pc = _pc;
     _pc = null;
+    if (pc != null) {
+      pc.onIceCandidate = null;
+      pc.onIceConnectionState = null;
+      pc.onTrack = null;
+      try {
+        await pc.close();
+      } catch (_) {}
+    }
     localRenderer.srcObject = null;
     remoteRenderer.srcObject = null;
     _pendingIce.clear();
