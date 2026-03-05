@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_theme.dart';
-import '../../models/chat.dart';
-import '../../services/call_manager.dart';
+import '../../services/call_service.dart';
 import '../../services/theme_notifier.dart';
-import '../../widgets/app_avatar.dart';
+import '../call/incoming_call_screen.dart';
 import '../call/voice_call_screen.dart';
+import '../call/video_call_screen.dart';
 import 'tabs/chats_tab.dart';
 import 'tabs/contacts_tab.dart';
 import 'tabs/settings_tab.dart';
@@ -30,15 +30,36 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     ThemeNotifier.instance.mode.addListener(_onTheme);
+    CallService.instance.addListener(_onCallState);
   }
 
   @override
   void dispose() {
     ThemeNotifier.instance.mode.removeListener(_onTheme);
+    CallService.instance.removeListener(_onCallState);
     super.dispose();
   }
 
   void _onTheme() => setState(() {});
+
+  void _onCallState() {
+    setState(() {});
+    if (CallService.instance.state == CallState.ringing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            fullscreenDialog: true,
+            builder: (_) => IncomingCallScreen(
+              peerId: CallService.instance.peerId!,
+              peerName: CallService.instance.peerName ?? 'Unknown',
+              isVideo: CallService.instance.isVideoCall,
+            ),
+          ),
+        );
+      });
+    }
+  }
 
   void _setIndex(int i) => setState(() => _index = i);
 
@@ -60,15 +81,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final w = MediaQuery.sizeOf(context).width;
     final body = _body();
+    final hasCall = CallService.instance.state == CallState.active ||
+        CallService.instance.state == CallState.calling;
 
-    return ValueListenableBuilder<Chat?>(
-      valueListenable: CallManager.instance.activeCall,
-      builder: (context, activeCall, _) {
-        if (w >= 900) return _DesktopLayout(index: _index, onTap: _setIndex, activeCall: activeCall, body: body);
-        if (w >= 600) return _TabletLayout(index: _index, onTap: _setIndex, activeCall: activeCall, body: body);
-        return _MobileLayout(index: _index, onTap: _setIndex, activeCall: activeCall, body: body);
-      },
-    );
+    if (w >= 900) return _DesktopLayout(index: _index, onTap: _setIndex, hasCall: hasCall, body: body);
+    if (w >= 600) return _TabletLayout(index: _index, onTap: _setIndex, hasCall: hasCall, body: body);
+    return _MobileLayout(index: _index, onTap: _setIndex, hasCall: hasCall, body: body);
   }
 }
 
@@ -77,10 +95,10 @@ class _HomeScreenState extends State<HomeScreen> {
 class _MobileLayout extends StatelessWidget {
   final int index;
   final ValueChanged<int> onTap;
-  final Chat? activeCall;
+  final bool hasCall;
   final Widget body;
 
-  const _MobileLayout({required this.index, required this.onTap, this.activeCall, required this.body});
+  const _MobileLayout({required this.index, required this.onTap, required this.hasCall, required this.body});
 
   static const _items = _HomeScreenState._items;
 
@@ -148,7 +166,7 @@ class _MobileLayout extends StatelessWidget {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (activeCall != null) _MinimizedCallBar(chat: activeCall!),
+          if (hasCall) const _MinimizedCallBar(),
           _buildNav(),
         ],
       ),
@@ -161,10 +179,10 @@ class _MobileLayout extends StatelessWidget {
 class _TabletLayout extends StatelessWidget {
   final int index;
   final ValueChanged<int> onTap;
-  final Chat? activeCall;
+  final bool hasCall;
   final Widget body;
 
-  const _TabletLayout({required this.index, required this.onTap, this.activeCall, required this.body});
+  const _TabletLayout({required this.index, required this.onTap, required this.hasCall, required this.body});
 
   static const _items = _HomeScreenState._items;
 
@@ -199,7 +217,7 @@ class _TabletLayout extends StatelessWidget {
               ],
             ),
           ),
-          if (activeCall != null) _MinimizedCallBar(chat: activeCall!),
+          if (hasCall) const _MinimizedCallBar(),
         ],
       ),
     );
@@ -211,10 +229,10 @@ class _TabletLayout extends StatelessWidget {
 class _DesktopLayout extends StatelessWidget {
   final int index;
   final ValueChanged<int> onTap;
-  final Chat? activeCall;
+  final bool hasCall;
   final Widget body;
 
-  const _DesktopLayout({required this.index, required this.onTap, this.activeCall, required this.body});
+  const _DesktopLayout({required this.index, required this.onTap, required this.hasCall, required this.body});
 
   static const _items = _HomeScreenState._items;
 
@@ -325,7 +343,7 @@ class _DesktopLayout extends StatelessWidget {
             child: Column(
               children: [
                 Expanded(child: body),
-                if (activeCall != null) _MinimizedCallBar(chat: activeCall!),
+                if (hasCall) const _MinimizedCallBar(),
               ],
             ),
           ),
@@ -338,22 +356,28 @@ class _DesktopLayout extends StatelessWidget {
 // ─── Minimized call bar ───────────────────────────────────────────────────────
 
 class _MinimizedCallBar extends StatelessWidget {
-  final Chat chat;
-  const _MinimizedCallBar({required this.chat});
+  const _MinimizedCallBar();
 
   @override
   Widget build(BuildContext context) {
+    final cs = CallService.instance;
+    final name = cs.peerName ?? '…';
+
     return GestureDetector(
       onTap: () => Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => VoiceCallScreen(chat: chat)),
+        MaterialPageRoute(
+          builder: (_) => cs.isVideoCall
+              ? const VideoCallScreen()
+              : const VoiceCallScreen(),
+        ),
       ),
       child: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
               AppColors.primary.withValues(alpha: 0.95),
-              chat.avatarStyle.color.withValues(alpha: 0.85),
+              AppColors.primaryLight.withValues(alpha: 0.85),
             ],
             begin: Alignment.centerLeft,
             end: Alignment.centerRight,
@@ -365,7 +389,6 @@ class _MinimizedCallBar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           children: [
-            // Pulsing mic icon
             Container(
               width: 32,
               height: 32,
@@ -376,20 +399,13 @@ class _MinimizedCallBar extends StatelessWidget {
               child: const Icon(Icons.mic_none_rounded, color: Colors.white, size: 16),
             ),
             const SizedBox(width: 12),
-            AppAvatar(
-              style: chat.avatarStyle,
-              initials: chat.initials,
-              size: 28,
-              isGroup: chat.isGroup,
-            ),
-            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    chat.name,
+                    name,
                     style: GoogleFonts.inter(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -398,7 +414,11 @@ class _MinimizedCallBar extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   Text(
-                    'Голосовой звонок · Нажмите, чтобы вернуться',
+                    cs.state == CallState.calling
+                        ? 'Соединяется…'
+                        : cs.isVideoCall
+                            ? 'Видеозвонок · Нажмите, чтобы вернуться'
+                            : 'Голосовой звонок · Нажмите, чтобы вернуться',
                     style: GoogleFonts.inter(
                       fontSize: 11,
                       color: Colors.white.withValues(alpha: 0.75),
@@ -408,7 +428,7 @@ class _MinimizedCallBar extends StatelessWidget {
               ),
             ),
             GestureDetector(
-              onTap: () => CallManager.instance.endCall(),
+              onTap: () => cs.endCall(),
               child: Container(
                 width: 32,
                 height: 32,

@@ -587,6 +587,46 @@ func (n *Node) Send(text string, toPeerID string) {
 	}
 }
 
+// SendCallSignal encrypts payload and sends a call-signaling message to toPeerID.
+// signalType must be one of: "call_offer", "call_answer", "call_reject", "call_end", "call_ice".
+func (n *Node) SendCallSignal(toPeerID, signalType, payload string) error {
+	peer := n.peers.Get(toPeerID)
+	if peer == nil {
+		return fmt.Errorf("unknown peer %s", toPeerID)
+	}
+	if isZeroKey(peer.SharedKey) {
+		return fmt.Errorf("no shared key with peer %s (handshake incomplete)", toPeerID[:8])
+	}
+
+	nonce, ciphertext, err := Encrypt(peer.SharedKey, payload)
+	if err != nil {
+		return fmt.Errorf("encrypt call signal: %w", err)
+	}
+
+	wireMsg := Message{
+		ID:        uuid.NewString(),
+		Type:      MsgType(signalType),
+		PeerID:    n.id,
+		Name:      n.name,
+		Content:   ciphertext,
+		Nonce:     nonce,
+		To:        toPeerID,
+		Timestamp: time.Now(),
+	}
+
+	n.mu.Lock()
+	cn := n.connByPeerID[toPeerID]
+	n.mu.Unlock()
+	if cn == nil {
+		return fmt.Errorf("no connection to peer %s", toPeerID[:8])
+	}
+	if err := cn.send(wireMsg); err != nil {
+		return fmt.Errorf("send call signal: %w", err)
+	}
+	log.Printf("[node] call signal %q → %s", signalType, peer.DisplayName)
+	return nil
+}
+
 // sendDirect encrypts text and unicasts it to the specified peer.
 func (n *Node) sendDirect(text, toPeerID string) {
 	peer := n.peers.Get(toPeerID)
@@ -814,6 +854,23 @@ func (n *Node) readLoop(cn *conn) {
 
 		case MsgTypeFileDone:
 			n.handleFileDone(msg)
+
+		case MsgTypeCallOffer, MsgTypeCallAnswer, MsgTypeCallReject, MsgTypeCallEnd, MsgTypeCallIce:
+			if msg.To != n.id {
+				continue
+			}
+			peer := n.peers.Get(msg.PeerID)
+			if peer == nil || isZeroKey(peer.SharedKey) {
+				log.Printf("[node] call signal from unknown/no-key peer %s", msg.PeerID[:8])
+				continue
+			}
+			plaintext, err := Decrypt(peer.SharedKey, msg.Nonce, msg.Content)
+			if err != nil {
+				log.Printf("[node] decrypt call signal from %s: %v", msg.PeerID[:8], err)
+				continue
+			}
+			msg.Content = plaintext
+			n.emit(Event{Msg: &msg})
 
 		case MsgTypePing:
 			cn.send(Message{Type: MsgTypePong, PeerID: n.id, Timestamp: time.Now()})

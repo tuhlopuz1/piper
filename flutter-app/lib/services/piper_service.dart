@@ -9,6 +9,9 @@ import '../models/chat.dart';
 import '../models/message.dart';
 import '../native/piper_events.dart';
 import '../native/piper_node.dart';
+import 'call_service.dart';
+import 'database_service.dart';
+import 'log_service.dart';
 
 /// Singleton service that owns the Go PiperNode and exposes observable state.
 class PiperService extends ChangeNotifier {
@@ -44,6 +47,15 @@ class PiperService extends ChangeNotifier {
   final Map<String, String> _transferToMsgId = {};
   // dedup: incoming transfer IDs already shown as a bubble
   final Set<String> _processedIncomingTransfers = {};
+
+  // ── Unread counts (persisted) ──────────────────────────────────────────────
+  final Map<String, int> _unreadCounts = {};
+
+  // ── Chat display names (persisted) — needed to show offline peers ──────────
+  final Map<String, String> _chatNames = {};
+
+  /// Set by ChatScreen when a chat is opened; used to skip unread increment.
+  String? currentChatId;
 
   // ── Public getters ────────────────────────────────────────────────────────
 
@@ -81,12 +93,32 @@ class PiperService extends ChangeNotifier {
       _node!.setDownloadsDir(_downloadsDir);
       _node!.start();
       _sub = _node!.events.listen(_onEvent);
+      CallService.instance.init(_node!);
+      await CallService.instance.loadDevicePreferences();
+
+      // Load persisted messages, unread counts, and chat names.
+      await DatabaseService.instance.init();
+      final storedMessages = await DatabaseService.instance.getAllMessages();
+      _messages.addAll(storedMessages);
+      final storedUnreads = await DatabaseService.instance.getUnreadCounts();
+      _unreadCounts.addAll(storedUnreads);
+      final storedNames = await DatabaseService.instance.getChatNames();
+      _chatNames.addAll(storedNames);
+
       _refresh();
     } catch (e) {
       initError = e.toString();
-      debugPrint('[PiperService] init error: $e');
+      LogService.instance.error('[PiperService] init error', detail: '$e');
       notifyListeners();
     }
+  }
+
+  /// Called by ChatScreen when the user opens a chat — clears unread badge.
+  Future<void> markChatAsRead(String chatId) async {
+    if (_unreadCounts[chatId] == 0) return;
+    _unreadCounts[chatId] = 0;
+    await DatabaseService.instance.clearUnread(chatId);
+    notifyListeners();
   }
 
   /// Update display name and avatar, persist to SharedPreferences.
@@ -118,7 +150,7 @@ class PiperService extends ChangeNotifier {
       _peers = _node?.peers ?? [];
       _groups = _node?.groups ?? [];
     } catch (e) {
-      debugPrint('[PiperService] refresh error: $e');
+      LogService.instance.warning('[PiperService] refresh error: $e');
     }
     notifyListeners();
   }
@@ -136,6 +168,8 @@ class PiperService extends ChangeNotifier {
         notifyListeners();
       case 'transfer':
         _handleTransfer(e);
+      case 'call':
+        CallService.instance.handleSignal(e);
     }
   }
 
@@ -153,7 +187,7 @@ class PiperService extends ChangeNotifier {
     if (chatId.isEmpty) return;
 
     _messages.putIfAbsent(chatId, () => []);
-    _messages[chatId]!.add(Message(
+    final msg = Message(
       id: e.msgId ?? '${DateTime.now().millisecondsSinceEpoch}',
       isMe: false,
       senderName: e.peerName,
@@ -163,7 +197,24 @@ class PiperService extends ChangeNotifier {
       time: e.timestamp != null
           ? DateTime.fromMillisecondsSinceEpoch(e.timestamp!)
           : DateTime.now(),
-    ));
+    );
+    _messages[chatId]!.add(msg);
+
+    // Persist name for DM chats so offline peers can still be shown.
+    if (e.peerName != null &&
+        e.peerName!.isNotEmpty &&
+        !chatId.startsWith('group:') &&
+        chatId != 'global') {
+      _chatNames[chatId] = e.peerName!;
+      DatabaseService.instance.upsertChatName(chatId, e.peerName!);
+    }
+
+    // Persist and track unread.
+    DatabaseService.instance.insertMessage(chatId, msg);
+    if (currentChatId != chatId) {
+      _unreadCounts[chatId] = (_unreadCounts[chatId] ?? 0) + 1;
+      DatabaseService.instance.incrementUnread(chatId);
+    }
   }
 
   void _handleTransfer(PiperEvent e) {
@@ -212,7 +263,7 @@ class PiperService extends ChangeNotifier {
           : null;
 
       _messages.putIfAbsent(chatId, () => []);
-      _messages[chatId]!.add(Message(
+      final fileMsg = Message(
         id: e.transferId ?? '${DateTime.now().millisecondsSinceEpoch}',
         isMe: false,
         senderName: e.peerName,
@@ -223,7 +274,15 @@ class PiperService extends ChangeNotifier {
         fileSize: e.fileSize,
         filePath: filePath,
         time: DateTime.now(),
-      ));
+      );
+      _messages[chatId]!.add(fileMsg);
+
+      // Persist and track unread.
+      DatabaseService.instance.insertMessage(chatId, fileMsg);
+      if (currentChatId != chatId) {
+        _unreadCounts[chatId] = (_unreadCounts[chatId] ?? 0) + 1;
+        DatabaseService.instance.incrementUnread(chatId);
+      }
       notifyListeners();
     }
   }
@@ -245,14 +304,28 @@ class PiperService extends ChangeNotifier {
       chatId = 'global';
     }
 
+    // Persist peer name for DM chats so the peer appears even when offline.
+    if (toPeerId != null && toPeerId.isNotEmpty) {
+      final peerName = _peers
+          .where((p) => p.id == toPeerId)
+          .map((p) => p.displayName)
+          .firstOrNull;
+      if (peerName != null && peerName.isNotEmpty) {
+        _chatNames[toPeerId] = peerName;
+        DatabaseService.instance.upsertChatName(toPeerId, peerName);
+      }
+    }
+
     _messages.putIfAbsent(chatId, () => []);
-    _messages[chatId]!.add(Message(
+    final outMsg = Message(
       id: '${DateTime.now().millisecondsSinceEpoch}',
       isMe: true,
       type: MsgType.text,
       text: text,
       time: DateTime.now(),
-    ));
+    );
+    _messages[chatId]!.add(outMsg);
+    DatabaseService.instance.insertMessage(chatId, outMsg);
     notifyListeners();
   }
 
@@ -272,8 +345,18 @@ class PiperService extends ChangeNotifier {
 
     final msgId = 'file_${DateTime.now().millisecondsSinceEpoch}';
 
+    // Persist peer name so the peer appears even when offline.
+    final peerName = _peers
+        .where((p) => p.id == peerId)
+        .map((p) => p.displayName)
+        .firstOrNull;
+    if (peerName != null && peerName.isNotEmpty) {
+      _chatNames[peerId] = peerName;
+      DatabaseService.instance.upsertChatName(peerId, peerName);
+    }
+
     _messages.putIfAbsent(peerId, () => []);
-    _messages[peerId]!.add(Message(
+    final outFileMsg = Message(
       id: msgId,
       isMe: true,
       type: MsgType.file,
@@ -283,7 +366,9 @@ class PiperService extends ChangeNotifier {
       filePath: filePath,
       time: DateTime.now(),
       delivered: false,
-    ));
+    );
+    _messages[peerId]!.add(outFileMsg);
+    DatabaseService.instance.insertMessage(peerId, outFileMsg);
 
     // Track so we can link to transferId when the 'offered' event arrives.
     _pendingFiles[name] = (peerId, msgId);
@@ -292,7 +377,7 @@ class PiperService extends ChangeNotifier {
       _node!.sendFile(peerId, filePath);
     } catch (e) {
       _pendingFiles.remove(name);
-      debugPrint('[PiperService] sendFile error: $e');
+      LogService.instance.error('[PiperService] sendFile error: $e');
     }
 
     notifyListeners();
@@ -350,6 +435,7 @@ class PiperService extends ChangeNotifier {
   List<Chat> get chats {
     final result = <Chat>[];
 
+    // ── Global chat (always shown) ────────────────────────────────────────────
     final globalMsgs = _messages['global'] ?? [];
     final onlinePeers = _peers.where((p) => p.isConnected).length;
     result.add(Chat(
@@ -360,7 +446,7 @@ class PiperService extends ChangeNotifier {
           : 'Переписка со всеми в сети',
       lastMessageTime:
           globalMsgs.isNotEmpty ? globalMsgs.last.time : DateTime.now(),
-      unreadCount: 0,
+      unreadCount: _unreadCounts['global'] ?? 0,
       isGroup: true,
       avatarStyle: AvatarStyle.emerald,
       initials: '#',
@@ -369,22 +455,37 @@ class PiperService extends ChangeNotifier {
       memberCount: onlinePeers + 1,
     ));
 
-    for (final p in _peers) {
-      final msgs = _messages[p.id] ?? [];
+    // ── DM chats: only those with at least one message ────────────────────────
+    // Includes both online and offline peers (offline = known from history).
+    final onlinePeerMap = {for (final p in _peers) p.id: p};
+
+    final dmChatIds = _messages.keys
+        .where((id) => id != 'global' && !id.startsWith('group:'))
+        .toList();
+
+    for (final peerId in dmChatIds) {
+      final msgs = _messages[peerId] ?? [];
+      if (msgs.isEmpty) continue;
+
+      final livePeer = onlinePeerMap[peerId];
+      final name =
+          livePeer?.displayName ?? _chatNames[peerId] ?? peerId;
+
       result.add(Chat(
-        id: p.id,
-        name: p.displayName,
-        lastMessage: msgs.isNotEmpty ? (msgs.last.text ?? '') : '',
-        lastMessageTime: msgs.isNotEmpty ? msgs.last.time : DateTime.now(),
-        unreadCount: 0,
+        id: peerId,
+        name: name,
+        lastMessage: msgs.last.text ?? '',
+        lastMessageTime: msgs.last.time,
+        unreadCount: _unreadCounts[peerId] ?? 0,
         isGroup: false,
-        avatarStyle: avatarStyleForPeer(p.id),
-        initials: initialsFor(p.displayName),
-        isOnline: p.isConnected,
+        avatarStyle: avatarStyleForPeer(peerId),
+        initials: initialsFor(name),
+        isOnline: livePeer?.isConnected ?? false,
         lastMessageType: MessageType.text,
       ));
     }
 
+    // ── Group chats ───────────────────────────────────────────────────────────
     for (final g in _groups) {
       final chatId = 'group:${g.id}';
       final msgs = _messages[chatId] ?? [];
@@ -393,7 +494,7 @@ class PiperService extends ChangeNotifier {
         name: g.name,
         lastMessage: msgs.isNotEmpty ? (msgs.last.text ?? '') : '',
         lastMessageTime: msgs.isNotEmpty ? msgs.last.time : DateTime.now(),
-        unreadCount: 0,
+        unreadCount: _unreadCounts[chatId] ?? 0,
         isGroup: true,
         avatarStyle: AvatarStyle.indigo,
         initials: initialsFor(g.name),

@@ -33,6 +33,13 @@ const (
 	MsgTypeFileChunk  MsgType = "file_chunk"  // one encrypted chunk of file data
 	MsgTypeFileDone   MsgType = "file_done"   // sender signals all chunks sent (carries hash)
 	MsgTypeFileReject MsgType = "file_reject" // receiver declines
+
+	// Call signaling message types (payload = encrypted JSON in Content field)
+	MsgTypeCallOffer  MsgType = "call_offer"  // caller → callee: {"sdp":"...","is_video":true}
+	MsgTypeCallAnswer MsgType = "call_answer" // callee → caller: {"sdp":"..."}
+	MsgTypeCallReject MsgType = "call_reject" // callee → caller: {}
+	MsgTypeCallEnd    MsgType = "call_end"    // either side: {}
+	MsgTypeCallIce    MsgType = "call_ice"    // either side: {"candidate":"...","sdpMid":"...","sdpMLineIndex":0}
 )
 
 // Message is the top-level protocol envelope exchanged between peers.

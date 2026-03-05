@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
 import '../../models/message.dart';
+import '../../services/call_service.dart';
 import '../../services/piper_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../call/voice_call_screen.dart';
@@ -31,15 +32,23 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _showAttach = false;
   bool _isRecording = false;
   int _recordSeconds = 0;
+  PiperService? _svc;
 
   @override
   void initState() {
     super.initState();
     _messages = getMockMessages(widget.chat);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _svc = context.read<PiperService>();
+      _svc!.currentChatId = widget.chat.id;
+      _svc!.markChatAsRead(widget.chat.id);
+    });
   }
 
   @override
   void dispose() {
+    _svc?.currentChatId = null;
     _textCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -260,16 +269,26 @@ class _ChatAppBar extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.phone_outlined, size: 20),
             color: AppColors.mutedForeground,
-            onPressed: () => Navigator.push(context, MaterialPageRoute(
-              builder: (_) => VoiceCallScreen(chat: chat),
-            )),
+            onPressed: () async {
+              await CallService.instance.startCall(chat.id, chat.name, false);
+              if (!context.mounted) return;
+              if (CallService.instance.state == CallState.idle) return;
+              Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const VoiceCallScreen(),
+              ));
+            },
           ),
           IconButton(
             icon: const Icon(Icons.videocam_outlined, size: 22),
             color: AppColors.mutedForeground,
-            onPressed: () => Navigator.push(context, MaterialPageRoute(
-              builder: (_) => VideoCallScreen(chat: chat),
-            )),
+            onPressed: () async {
+              await CallService.instance.startCall(chat.id, chat.name, true);
+              if (!context.mounted) return;
+              if (CallService.instance.state == CallState.idle) return;
+              Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const VideoCallScreen(),
+              ));
+            },
           ),
         ],
       ),

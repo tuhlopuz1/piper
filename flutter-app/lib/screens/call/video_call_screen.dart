@@ -1,58 +1,108 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
+import '../../services/call_service.dart';
 import '../../widgets/app_avatar.dart';
 
+AvatarStyle _avatarStyleForPeer(String peerId) {
+  if (peerId.isEmpty) return AvatarStyle.violet;
+  final hash = peerId.codeUnits.fold(0, (a, b) => a + b);
+  return AvatarStyle.values[hash % AvatarStyle.values.length];
+}
+
+String _initials(String name) {
+  if (name.isEmpty) return '?';
+  final parts = name.trim().split(' ');
+  if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+  return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
+}
+
 class VideoCallScreen extends StatefulWidget {
-  final Chat chat;
-  const VideoCallScreen({super.key, required this.chat});
+  const VideoCallScreen({super.key});
 
   @override
   State<VideoCallScreen> createState() => _VideoCallScreenState();
 }
 
 class _VideoCallScreenState extends State<VideoCallScreen> {
-  bool _muted = false;
-  bool _cameraOff = false;
   Offset _pipOffset = const Offset(16, 100);
 
   @override
+  void initState() {
+    super.initState();
+    CallService.instance.addListener(_onCallState);
+  }
+
+  @override
+  void dispose() {
+    CallService.instance.removeListener(_onCallState);
+    super.dispose();
+  }
+
+  void _onCallState() {
+    if (CallService.instance.state == CallState.idle) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+      });
+    } else {
+      if (mounted) setState(() {});
+    }
+  }
+
+  bool get _isMobile =>
+      !Platform.isWindows && !Platform.isLinux && !Platform.isMacOS;
+
+  @override
   Widget build(BuildContext context) {
+    final cs = CallService.instance;
+    final name = cs.peerName ?? '…';
+    final avatarStyle = _avatarStyleForPeer(cs.peerId ?? '');
     final size = MediaQuery.of(context).size;
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // ── Remote video (full screen placeholder) ────────────────────────
-          Container(
-            width: double.infinity,
-            height: double.infinity,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  widget.chat.avatarStyle.color.withValues(alpha: 0.6),
-                  Colors.black,
-                ],
-              ),
-            ),
-            child: Center(
-              child: AppAvatar(
-                style: widget.chat.avatarStyle,
-                initials: widget.chat.initials,
-                size: 110,
-                isGroup: widget.chat.isGroup,
-              )
-                  .animate(onPlay: (c) => c.repeat(reverse: true))
-                  .scaleXY(end: 1.03, duration: 2000.ms, curve: Curves.easeInOut),
-            ),
+          // ── Remote video (full screen) ─────────────────────────────────────
+          Positioned.fill(
+            child: cs.state == CallState.active
+                ? RTCVideoView(
+                    cs.remoteRenderer,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  )
+                : Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          avatarStyle.color.withValues(alpha: 0.6),
+                          Colors.black,
+                        ],
+                      ),
+                    ),
+                    child: Center(
+                      child: AppAvatar(
+                        style: avatarStyle,
+                        initials: _initials(name),
+                        size: 110,
+                        isGroup: false,
+                      )
+                          .animate(onPlay: (c) => c.repeat(reverse: true))
+                          .scaleXY(
+                              end: 1.03,
+                              duration: 2000.ms,
+                              curve: Curves.easeInOut),
+                    ),
+                  ),
           ),
 
-          // ── Top overlay ───────────────────────────────────────────────────
+          // ── Top overlay ────────────────────────────────────────────────────
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
             left: 12,
@@ -60,7 +110,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             child: Column(
               children: [
                 Text(
-                  widget.chat.name,
+                  name,
                   style: GoogleFonts.inter(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
@@ -68,14 +118,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                   ),
                 ),
                 Text(
-                  'Видеозвонок',
-                  style: GoogleFonts.inter(fontSize: 12, color: Colors.white70),
+                  cs.state == CallState.active
+                      ? 'Видеозвонок'
+                      : 'Соединяется...',
+                  style:
+                      GoogleFonts.inter(fontSize: 12, color: Colors.white70),
                 ),
               ],
             ),
           ),
 
-          // ── Draggable PiP (own camera) ────────────────────────────────────
+          // ── Draggable PiP (local camera) ───────────────────────────────────
           Positioned(
             left: _pipOffset.dx,
             top: _pipOffset.dy,
@@ -90,58 +143,72 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
               },
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Container(
+                child: SizedBox(
                   width: 100,
                   height: 160,
-                  color: _cameraOff ? Colors.grey.shade900 : AppColors.primary.withValues(alpha: 0.5),
-                  child: _cameraOff
-                      ? const Center(child: Icon(Icons.videocam_off_outlined, color: Colors.white54, size: 28))
-                      : Center(
-                          child: Text(
-                            'ME',
-                            style: GoogleFonts.inter(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
+                  child: cs.isCameraOff
+                      ? Container(
+                          color: Colors.grey.shade900,
+                          child: const Center(
+                            child: Icon(Icons.videocam_off_outlined,
+                                color: Colors.white54, size: 28),
                           ),
+                        )
+                      : RTCVideoView(
+                          cs.localRenderer,
+                          mirror: true,
+                          objectFit: RTCVideoViewObjectFit
+                              .RTCVideoViewObjectFitCover,
                         ),
                 ),
               ),
             ),
           ),
 
-          // ── Bottom controls ───────────────────────────────────────────────
+          // ── Bottom controls ────────────────────────────────────────────────
           Positioned(
             bottom: 0,
             left: 0,
             right: 0,
             child: Container(
-              padding: EdgeInsets.fromLTRB(32, 20, 32, MediaQuery.of(context).padding.bottom + 24),
+              padding: EdgeInsets.fromLTRB(
+                  32, 20, 32, MediaQuery.of(context).padding.bottom + 24),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
-                  colors: [Colors.black.withValues(alpha: 0.85), Colors.transparent],
+                  colors: [
+                    Colors.black.withValues(alpha: 0.85),
+                    Colors.transparent
+                  ],
                 ),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   _VideoButton(
-                    icon: _muted ? Icons.mic_off_rounded : Icons.mic_none_rounded,
-                    active: _muted,
-                    onTap: () => setState(() => _muted = !_muted),
+                    icon: cs.isMuted
+                        ? Icons.mic_off_rounded
+                        : Icons.mic_none_rounded,
+                    active: cs.isMuted,
+                    onTap: () => cs.toggleMute(),
                   ),
+                  if (_isMobile)
+                    _VideoButton(
+                      icon: Icons.flip_camera_ios_outlined,
+                      onTap: () => cs.flipCamera(),
+                    ),
                   _VideoButton(
                     icon: Icons.call_end_rounded,
                     isEnd: true,
-                    onTap: () => Navigator.pop(context),
+                    onTap: () => cs.endCall(),
                   ),
                   _VideoButton(
-                    icon: _cameraOff ? Icons.videocam_off_outlined : Icons.videocam_outlined,
-                    active: _cameraOff,
-                    onTap: () => setState(() => _cameraOff = !_cameraOff),
+                    icon: cs.isCameraOff
+                        ? Icons.videocam_off_outlined
+                        : Icons.videocam_outlined,
+                    active: cs.isCameraOff,
+                    onTap: () => cs.toggleCamera(),
                   ),
                 ],
               ),

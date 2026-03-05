@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -8,7 +10,9 @@ import '../../../services/theme_notifier.dart';
 import '../../../widgets/app_avatar.dart';
 import '../../profile/edit_profile_screen.dart';
 import '../../settings/device_info_screen.dart';
+import '../../settings/devices_screen.dart';
 import '../../settings/downloads_screen.dart';
+import '../../settings/logs_screen.dart';
 
 class SettingsTab extends StatelessWidget {
   const SettingsTab({super.key});
@@ -162,6 +166,18 @@ class SettingsTab extends StatelessWidget {
                               builder: (_) => const DownloadsScreen()),
                         ),
                       ),
+                      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS)
+                        _Item(
+                          Icons.mic_none_rounded,
+                          'Устройства для звонков',
+                          null,
+                          false,
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const DevicesScreen()),
+                          ),
+                        ),
                       _Item(
                         Icons.info_outline_rounded,
                         'Информация об устройстве',
@@ -171,6 +187,17 @@ class SettingsTab extends StatelessWidget {
                           context,
                           MaterialPageRoute(
                               builder: (_) => const DeviceInfoScreen()),
+                        ),
+                      ),
+                      _Item(
+                        Icons.terminal_rounded,
+                        'Логи',
+                        null,
+                        false,
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const LogsScreen()),
                         ),
                       ),
                     ],

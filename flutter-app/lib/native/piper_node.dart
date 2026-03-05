@@ -141,6 +141,24 @@ class PiperNode {
     }
   }
 
+  // ─── Call signaling ────────────────────────────────────────────────────────
+
+  /// Send a call signal (offer/answer/ice/reject/end) to a peer. Throws on error.
+  void sendCallSignal(String toPeerId, String signalType, String payload) {
+    final peerPtr = toPeerId.toNativeUtf8();
+    final typePtr = signalType.toNativeUtf8();
+    final payloadPtr = payload.toNativeUtf8();
+    final errPtr = _bindings.sendCallSignal(_handle, peerPtr, typePtr, payloadPtr);
+    malloc.free(peerPtr);
+    malloc.free(typePtr);
+    malloc.free(payloadPtr);
+    if (errPtr != nullptr) {
+      final err = errPtr.toDartString();
+      _bindings.freeString(errPtr);
+      throw Exception(err);
+    }
+  }
+
   // ─── Groups ────────────────────────────────────────────────────────────────
 
   /// Create a new group and return its ID.

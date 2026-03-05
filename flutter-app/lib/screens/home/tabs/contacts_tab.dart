@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../../theme/app_theme.dart';
 import '../../../models/chat.dart';
+import '../../../services/call_service.dart';
 import '../../../services/piper_service.dart';
 import '../../../widgets/app_avatar.dart';
 import '../../contacts/contact_info_screen.dart';
@@ -125,18 +126,24 @@ class _ContactsTabState extends State<ContactsTab>
                 delegate: SliverChildBuilderDelegate(
                   (_, i) => _DeviceTile(
                     contact: online[i],
-                    onCall: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => VoiceCallScreen(chat: _contactToChat(online[i])),
-                      ),
-                    ),
-                    onVideo: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => VideoCallScreen(chat: _contactToChat(online[i])),
-                      ),
-                    ),
+                    onCall: () async {
+                      final c = online[i];
+                      await CallService.instance.startCall(c.id, c.name, false);
+                      if (!context.mounted) return;
+                      if (CallService.instance.state == CallState.idle) return;
+                      Navigator.push(context, MaterialPageRoute(
+                        builder: (_) => const VoiceCallScreen(),
+                      ));
+                    },
+                    onVideo: () async {
+                      final c = online[i];
+                      await CallService.instance.startCall(c.id, c.name, true);
+                      if (!context.mounted) return;
+                      if (CallService.instance.state == CallState.idle) return;
+                      Navigator.push(context, MaterialPageRoute(
+                        builder: (_) => const VideoCallScreen(),
+                      ));
+                    },
                     onChat: () => Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -168,18 +175,24 @@ class _ContactsTabState extends State<ContactsTab>
                   (_, i) => _DeviceTile(
                     contact: offline[i],
                     dimmed: true,
-                    onCall: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => VoiceCallScreen(chat: _contactToChat(offline[i])),
-                      ),
-                    ),
-                    onVideo: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => VideoCallScreen(chat: _contactToChat(offline[i])),
-                      ),
-                    ),
+                    onCall: () async {
+                      final c = offline[i];
+                      await CallService.instance.startCall(c.id, c.name, false);
+                      if (!context.mounted) return;
+                      if (CallService.instance.state == CallState.idle) return;
+                      Navigator.push(context, MaterialPageRoute(
+                        builder: (_) => const VoiceCallScreen(),
+                      ));
+                    },
+                    onVideo: () async {
+                      final c = offline[i];
+                      await CallService.instance.startCall(c.id, c.name, true);
+                      if (!context.mounted) return;
+                      if (CallService.instance.state == CallState.idle) return;
+                      Navigator.push(context, MaterialPageRoute(
+                        builder: (_) => const VideoCallScreen(),
+                      ));
+                    },
                     onChat: () => Navigator.push(
                       context,
                       MaterialPageRoute(

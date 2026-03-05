@@ -47,10 +47,9 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 Name: "startmenu";   Description: "Создать группу в меню «Пуск»";  GroupDescription: "Дополнительные ярлыки:"
 
 [Files]
-Source: "{#BuildDir}\{#AppExe}";           DestDir: "{app}"; Flags: ignoreversion
-Source: "{#BuildDir}\flutter_windows.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#BuildDir}\libpiper.dll";        DestDir: "{app}"; Flags: ignoreversion
-Source: "{#BuildDir}\data\*";             DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#BuildDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\*.dll";     DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\data\*";    DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startmenu
@@ -59,8 +58,17 @@ Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopic
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Запустить {#AppName}"; Flags: nowait postinstall skipifsilent
 
+; Remove files created by the app at runtime that the uninstaller won't
+; know about (downloaded files via Go backend, SQLite WAL files, etc.)
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\piper-files"
+Type: filesandordirs; Name: "{app}\piper-downloads"
+
 [Code]
-// ── Uninstaller: ask for confirmation before removing ─────────────────────────
+var
+  DeleteUserData: Boolean;
+
+// ── Uninstaller: ask for confirmation and whether to wipe user data ───────────
 function InitializeUninstall(): Boolean;
 var
   Response: Integer;
@@ -71,5 +79,30 @@ begin
     mbConfirmation,
     MB_YESNO or MB_DEFBUTTON2
   );
-  Result := (Response = IDYES);
+  if Response <> IDYES then begin
+    Result := False;
+    Exit;
+  end;
+
+  Response := MsgBox(
+    'Удалить данные приложения?' + #13#10 +
+    '  - История чатов и сообщений' + #13#10 +
+    '  - Настройки профиля (имя, аватар)' + #13#10#13#10 +
+    'Если выбрать "Нет", данные сохранятся и будут использованы при повторной установке.',
+    mbConfirmation,
+    MB_YESNO or MB_DEFBUTTON2
+  );
+  DeleteUserData := (Response = IDYES);
+
+  Result := True;
+end;
+
+// ── After uninstall: delete AppData folder if the user agreed ─────────────────
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if (CurUninstallStep = usPostUninstall) and DeleteUserData then
+  begin
+    // SharedPreferences и SQLite хранятся здесь (CompanyName\ProductName из Runner.rc)
+    DelTree(ExpandConstant('{userappdata}\com.example\piper'), True, True, True);
+  end;
 end;

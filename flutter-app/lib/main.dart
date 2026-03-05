@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'services/log_service.dart';
 import 'services/piper_service.dart';
 import 'services/theme_notifier.dart';
 import 'theme/app_theme.dart';
@@ -11,6 +12,7 @@ import 'screens/home/home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  LogService.instance.install();
 
   SystemChrome.setSystemUIOverlayStyle(
     SystemUiOverlayStyle(

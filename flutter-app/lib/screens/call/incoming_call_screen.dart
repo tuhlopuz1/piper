@@ -3,21 +3,40 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
+import '../../services/call_service.dart';
 import '../../widgets/app_avatar.dart';
 import 'voice_call_screen.dart';
+import 'video_call_screen.dart';
+
+AvatarStyle _avatarStyleForPeer(String peerId) {
+  if (peerId.isEmpty) return AvatarStyle.violet;
+  final hash = peerId.codeUnits.fold(0, (a, b) => a + b);
+  return AvatarStyle.values[hash % AvatarStyle.values.length];
+}
+
+String _initials(String name) {
+  if (name.isEmpty) return '?';
+  final parts = name.trim().split(' ');
+  if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+  return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
+}
 
 class IncomingCallScreen extends StatelessWidget {
-  final Chat chat;
+  final String peerId;
+  final String peerName;
   final bool isVideo;
 
   const IncomingCallScreen({
     super.key,
-    required this.chat,
+    required this.peerId,
+    required this.peerName,
     this.isVideo = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final avatarStyle = _avatarStyleForPeer(peerId);
+
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
@@ -25,7 +44,7 @@ class IncomingCallScreen extends StatelessWidget {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              chat.avatarStyle.color.withValues(alpha: 0.35),
+              avatarStyle.color.withValues(alpha: 0.35),
               AppColors.bgBase,
             ],
           ),
@@ -37,10 +56,10 @@ class IncomingCallScreen extends StatelessWidget {
 
               // ── Caller info ───────────────────────────────────────────────
               AppAvatar(
-                style: chat.avatarStyle,
-                initials: chat.initials,
+                style: avatarStyle,
+                initials: _initials(peerName),
                 size: 110,
-                isGroup: chat.isGroup,
+                isGroup: false,
               )
                   .animate(onPlay: (c) => c.repeat(reverse: true))
                   .scaleXY(end: 1.05, duration: 1600.ms, curve: Curves.easeInOut),
@@ -48,7 +67,7 @@ class IncomingCallScreen extends StatelessWidget {
               const SizedBox(height: 24),
 
               Text(
-                chat.name,
+                peerName,
                 style: GoogleFonts.inter(
                   fontSize: 30,
                   fontWeight: FontWeight.w700,
@@ -61,7 +80,8 @@ class IncomingCallScreen extends StatelessWidget {
 
               Text(
                 isVideo ? 'Входящий видеозвонок...' : 'Входящий звонок...',
-                style: GoogleFonts.inter(fontSize: 15, color: AppColors.mutedForeground),
+                style: GoogleFonts.inter(
+                    fontSize: 15, color: AppColors.mutedForeground),
               )
                   .animate(onPlay: (c) => c.repeat(reverse: true))
                   .fadeIn(duration: 800.ms)
@@ -72,7 +92,8 @@ class IncomingCallScreen extends StatelessWidget {
 
               // ── Action buttons ────────────────────────────────────────────
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 40),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 48, vertical: 40),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -81,19 +102,33 @@ class IncomingCallScreen extends StatelessWidget {
                       icon: Icons.call_end_rounded,
                       color: AppColors.destructive,
                       label: 'Отклонить',
-                      onTap: () => Navigator.pop(context),
+                      onTap: () {
+                        CallService.instance.rejectCall();
+                        Navigator.pop(context);
+                      },
                     ),
 
                     // Accept
                     _RingButton(
-                      icon: isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+                      icon: isVideo
+                          ? Icons.videocam_rounded
+                          : Icons.call_rounded,
                       color: AppColors.online,
                       label: 'Принять',
-                      onTap: () {
+                      onTap: () async {
+                        await CallService.instance.acceptCall();
+                        if (!context.mounted) return;
+                        // If acceptCall() failed, state will be idle → just pop
+                        if (CallService.instance.state == CallState.idle) {
+                          Navigator.pop(context);
+                          return;
+                        }
                         Navigator.pushReplacement(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => VoiceCallScreen(chat: chat),
+                            builder: (_) => isVideo
+                                ? const VideoCallScreen()
+                                : const VoiceCallScreen(),
                           ),
                         );
                       },
@@ -178,7 +213,8 @@ class _RingButtonState extends State<_RingButton> {
               Container(
                 width: 68,
                 height: 68,
-                decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle),
+                decoration: BoxDecoration(
+                    color: widget.color, shape: BoxShape.circle),
                 child: Icon(widget.icon, color: Colors.white, size: 30),
               ),
             ],
@@ -187,7 +223,8 @@ class _RingButtonState extends State<_RingButton> {
         const SizedBox(height: 12),
         Text(
           widget.label,
-          style: GoogleFonts.inter(fontSize: 13, color: AppColors.mutedForeground),
+          style: GoogleFonts.inter(
+              fontSize: 13, color: AppColors.mutedForeground),
         ),
       ],
     );

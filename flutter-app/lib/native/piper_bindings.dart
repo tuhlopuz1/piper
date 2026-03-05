@@ -56,6 +56,17 @@ typedef _SetEventCallbackDart = void Function(int handle, Pointer<NativeFunction
 typedef _SetDownloadsDirC = Void Function(Int32 handle, Pointer<Utf8> dir);
 typedef _SetDownloadsDirDart = void Function(int handle, Pointer<Utf8> dir);
 
+typedef _SendCallSignalC = Pointer<Utf8> Function(
+    Int32 handle,
+    Pointer<Utf8> toPeerID,
+    Pointer<Utf8> signalType,
+    Pointer<Utf8> payload);
+typedef _SendCallSignalDart = Pointer<Utf8> Function(
+    int handle,
+    Pointer<Utf8> toPeerID,
+    Pointer<Utf8> signalType,
+    Pointer<Utf8> payload);
+
 typedef _FreeStringC = Void Function(Pointer<Utf8> s);
 typedef _FreeStringDart = void Function(Pointer<Utf8> s);
 
@@ -79,6 +90,7 @@ class PiperBindings {
   late final _SetEventCallbackDart setEventCallback;
   late final _SetDownloadsDirDart setDownloadsDir;
   late final _SetNodeNameDart setNodeName;
+  late final _SendCallSignalDart sendCallSignal;
   late final _FreeStringDart freeString;
 
   PiperBindings({String? libraryPath}) {
@@ -118,6 +130,8 @@ class PiperBindings {
         .lookupFunction<_SetDownloadsDirC, _SetDownloadsDirDart>('PiperSetDownloadsDir');
     setNodeName = _lib
         .lookupFunction<_SetNodeNameC, _SetNodeNameDart>('PiperSetNodeName');
+    sendCallSignal = _lib
+        .lookupFunction<_SendCallSignalC, _SendCallSignalDart>('PiperSendCallSignal');
     freeString = _lib
         .lookupFunction<_FreeStringC, _FreeStringDart>('PiperFreeString');
   }

@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
 import '../../models/message.dart';
+import '../../services/call_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../chat/chat_screen.dart';
 import '../call/voice_call_screen.dart';
@@ -14,8 +15,6 @@ class ContactInfoScreen extends StatelessWidget {
 
   const ContactInfoScreen({super.key, required this.chat});
 
-  // Build a fake chat for use with VoiceCallScreen / VideoCallScreen
-  Chat get _callChat => chat;
 
   List<Message> get _mediaMessages {
     final msgs = getMockMessages(chat);
@@ -138,19 +137,27 @@ class ContactInfoScreen extends StatelessWidget {
                       _ActionBtn(
                         icon: Icons.call_outlined,
                         label: 'Звонок',
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => VoiceCallScreen(chat: _callChat)),
-                        ),
+                        onTap: () async {
+                          await CallService.instance.startCall(chat.id, chat.name, false);
+                          if (!context.mounted) return;
+                          if (CallService.instance.state == CallState.idle) return;
+                          Navigator.push(context, MaterialPageRoute(
+                            builder: (_) => const VoiceCallScreen(),
+                          ));
+                        },
                       ),
                       const SizedBox(width: 20),
                       _ActionBtn(
                         icon: Icons.videocam_outlined,
                         label: 'Видео',
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => VideoCallScreen(chat: _callChat)),
-                        ),
+                        onTap: () async {
+                          await CallService.instance.startCall(chat.id, chat.name, true);
+                          if (!context.mounted) return;
+                          if (CallService.instance.state == CallState.idle) return;
+                          Navigator.push(context, MaterialPageRoute(
+                            builder: (_) => const VideoCallScreen(),
+                          ));
+                        },
                       ),
                     ],
                   ).animate(delay: 160.ms).fadeIn(duration: 400.ms),

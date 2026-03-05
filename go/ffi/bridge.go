@@ -190,6 +190,20 @@ func PiperSendFileToGroup(handle C.int, groupID, filePath *C.char) *C.char {
 	return nil
 }
 
+// ─── Call signaling ──────────────────────────────────────────────────────────
+
+//export PiperSendCallSignal
+func PiperSendCallSignal(handle C.int, toPeerID, signalType, payload *C.char) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString("invalid handle")
+	}
+	if err := e.node.SendCallSignal(C.GoString(toPeerID), C.GoString(signalType), C.GoString(payload)); err != nil {
+		return C.CString(err.Error())
+	}
+	return nil
+}
+
 // ─── Groups ──────────────────────────────────────────────────────────────────
 
 //export PiperCreateGroup
@@ -337,15 +351,26 @@ func convertEvent(ev core.Event) ffiEvent {
 
 	if ev.Msg != nil {
 		m := ev.Msg
-		f.Type = "message"
-		f.MsgID = m.ID
-		f.MsgType = string(m.Type)
-		f.PeerID = m.PeerID
-		f.PeerName = m.Name
-		f.Content = m.Content
-		f.To = m.To
-		f.GroupID = m.GroupID
-		f.Timestamp = m.Timestamp.UnixMilli()
+		// Call signaling messages are routed as "call" events, not "message".
+		switch m.Type {
+		case core.MsgTypeCallOffer, core.MsgTypeCallAnswer,
+			core.MsgTypeCallReject, core.MsgTypeCallEnd, core.MsgTypeCallIce:
+			f.Type = "call"
+			f.MsgType = string(m.Type)
+			f.PeerID = m.PeerID
+			f.PeerName = m.Name
+			f.Content = m.Content // decrypted JSON payload
+		default:
+			f.Type = "message"
+			f.MsgID = m.ID
+			f.MsgType = string(m.Type)
+			f.PeerID = m.PeerID
+			f.PeerName = m.Name
+			f.Content = m.Content
+			f.To = m.To
+			f.GroupID = m.GroupID
+			f.Timestamp = m.Timestamp.UnixMilli()
+		}
 	}
 
 	if ev.Peer != nil {

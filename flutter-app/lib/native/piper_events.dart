@@ -84,6 +84,7 @@ class PiperEvent {
   bool get isPeer => type == 'peer';
   bool get isGroup => type == 'group';
   bool get isTransfer => type == 'transfer';
+  bool get isCall => type == 'call';
 }
 
 class PeerInfo {

@@ -3,30 +3,53 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
+import '../../services/call_service.dart';
 import '../../widgets/app_avatar.dart';
-import '../../services/call_manager.dart';
 
 class VoiceCallScreen extends StatefulWidget {
-  final Chat chat;
-  const VoiceCallScreen({super.key, required this.chat});
+  const VoiceCallScreen({super.key});
 
   @override
   State<VoiceCallScreen> createState() => _VoiceCallScreenState();
 }
 
 class _VoiceCallScreenState extends State<VoiceCallScreen> {
-  bool _muted = false;
-  bool _speaker = false;
-  int _seconds = 0;
+  @override
+  void initState() {
+    super.initState();
+    CallService.instance.addListener(_onCallState);
+  }
+
+  @override
+  void dispose() {
+    CallService.instance.removeListener(_onCallState);
+    super.dispose();
+  }
+
+  void _onCallState() {
+    if (CallService.instance.state == CallState.idle) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+      });
+    } else {
+      if (mounted) setState(() {});
+    }
+  }
 
   String get _timer {
-    final m = _seconds ~/ 60;
-    final s = _seconds % 60;
-    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+    final s = CallService.instance.callDurationSeconds;
+    final m = s ~/ 60;
+    final sec = s % 60;
+    return '${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
   }
 
   @override
   Widget build(BuildContext context) {
+    final cs = CallService.instance;
+    final name = cs.peerName ?? '…';
+    final avatarStyle = _avatarStyleForPeer(cs.peerId ?? '');
+    final initials = _initials(name);
+
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
@@ -34,7 +57,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              widget.chat.avatarStyle.color.withValues(alpha: 0.3),
+              avatarStyle.color.withValues(alpha: 0.3),
               AppColors.bgBase,
             ],
           ),
@@ -64,10 +87,10 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
 
               // ── Avatar + info ─────────────────────────────────────────────
               AppAvatar(
-                style: widget.chat.avatarStyle,
-                initials: widget.chat.initials,
+                style: avatarStyle,
+                initials: initials,
                 size: 100,
-                isGroup: widget.chat.isGroup,
+                isGroup: false,
               )
                   .animate(onPlay: (c) => c.repeat(reverse: true))
                   .scaleXY(end: 1.04, duration: 1800.ms, curve: Curves.easeInOut),
@@ -75,7 +98,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
               const SizedBox(height: 20),
 
               Text(
-                widget.chat.name,
+                name,
                 style: GoogleFonts.inter(
                   fontSize: 28,
                   fontWeight: FontWeight.w700,
@@ -87,15 +110,15 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
               const SizedBox(height: 8),
 
               Text(
-                _seconds > 0 ? _timer : 'Соединяется...',
+                cs.state == CallState.active ? _timer : 'Соединяется...',
                 style: GoogleFonts.inter(
                   fontSize: 15,
                   color: AppColors.mutedForeground,
                 ),
               ).animate(onPlay: (c) => c.repeat()).shimmer(
-                duration: 1800.ms,
-                color: AppColors.primaryLight.withValues(alpha: 0.6),
-              ),
+                    duration: 1800.ms,
+                    color: AppColors.primaryLight.withValues(alpha: 0.6),
+                  ),
 
               const Spacer(),
 
@@ -106,10 +129,10 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
                     _CallButton(
-                      icon: _muted ? Icons.mic_off_rounded : Icons.mic_none_rounded,
-                      color: _muted ? AppColors.destructive : AppColors.bgSubtle,
-                      iconColor: _muted ? Colors.white : AppColors.foreground,
-                      onTap: () => setState(() => _muted = !_muted),
+                      icon: cs.isMuted ? Icons.mic_off_rounded : Icons.mic_none_rounded,
+                      color: cs.isMuted ? AppColors.destructive : AppColors.bgSubtle,
+                      iconColor: cs.isMuted ? Colors.white : AppColors.foreground,
+                      onTap: () => cs.toggleMute(),
                     ),
                     _CallButton(
                       icon: Icons.call_end_rounded,
@@ -117,15 +140,15 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
                       iconColor: Colors.white,
                       size: 68,
                       onTap: () {
-                        CallManager.instance.endCall();
-                        Navigator.pop(context);
+                        cs.endCall();
+                        // _onCallState will pop when state → idle
                       },
                     ),
                     _CallButton(
-                      icon: _speaker ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-                      color: _speaker ? AppColors.primary : AppColors.bgSubtle,
-                      iconColor: _speaker ? Colors.white : AppColors.foreground,
-                      onTap: () => setState(() => _speaker = !_speaker),
+                      icon: cs.isSpeakerOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                      color: cs.isSpeakerOn ? AppColors.primary : AppColors.bgSubtle,
+                      iconColor: cs.isSpeakerOn ? Colors.white : AppColors.foreground,
+                      onTap: () => cs.toggleSpeaker(),
                     ),
                   ],
                 ),
@@ -136,6 +159,19 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
       ),
     );
   }
+}
+
+AvatarStyle _avatarStyleForPeer(String peerId) {
+  if (peerId.isEmpty) return AvatarStyle.violet;
+  final hash = peerId.codeUnits.fold(0, (a, b) => a + b);
+  return AvatarStyle.values[hash % AvatarStyle.values.length];
+}
+
+String _initials(String name) {
+  if (name.isEmpty) return '?';
+  final parts = name.trim().split(' ');
+  if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+  return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
 }
 
 class _CallButton extends StatelessWidget {
