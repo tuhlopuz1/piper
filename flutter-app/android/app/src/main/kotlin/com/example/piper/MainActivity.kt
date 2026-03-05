@@ -7,8 +7,8 @@ import io.flutter.embedding.android.FlutterActivity
 class MainActivity : FlutterActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
 
-    override fun onStart() {
-        super.onStart()
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
         val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
         multicastLock = wifi?.createMulticastLock("piper_mdns")?.also {
             it.setReferenceCounted(true)
@@ -16,9 +16,11 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    override fun onStop() {
-        super.onStop()
-        multicastLock?.release()
+    override fun onDestroy() {
+        multicastLock?.let {
+            if (it.isHeld) it.release()
+        }
         multicastLock = null
+        super.onDestroy()
     }
 }

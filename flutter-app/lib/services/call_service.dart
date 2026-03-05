@@ -81,12 +81,13 @@ class CallService extends ChangeNotifier {
         notifyListeners();
         return;
       }
+      await loadDevicePreferences();
       await _setupPeerConnection();
       _localStream = await _getUserMedia(isVideo);
       for (final t in _localStream!.getTracks()) {
         await _pc!.addTrack(t, _localStream!);
       }
-      if (isVideo) localRenderer.srcObject = _localStream;
+      localRenderer.srcObject = _localStream;
 
       final offer = await _pc!.createOffer({
         'offerToReceiveAudio': true,
@@ -185,12 +186,13 @@ class CallService extends ChangeNotifier {
         notifyListeners();
         return;
       }
+      await loadDevicePreferences();
       await _setupPeerConnection();
       _localStream = await _getUserMedia(isVideoCall);
       for (final t in _localStream!.getTracks()) {
         await _pc!.addTrack(t, _localStream!);
       }
-      if (isVideoCall) localRenderer.srcObject = _localStream;
+      localRenderer.srcObject = _localStream;
 
       await _pc!.setRemoteDescription(_incomingOffer!);
       for (final c in _pendingIce) {
@@ -230,15 +232,21 @@ class CallService extends ChangeNotifier {
   Future<void> endCall() async {
     if (_ending || state == CallState.idle) return;
     _ending = true;
-    try {
-      if (peerId != null) {
-        _piperNode.sendCallSignal(peerId!, 'call_end', '{}');
-      }
-    } catch (_) {}
-    await _cleanup();
+    final pid = peerId;
+    // Transition to idle and notify UI IMMEDIATELY so the screen pops.
+    // The FFI signal send MUST happen after — sendCallSignal is a
+    // synchronous FFI call that can block if the TCP connection hangs.
     state = CallState.idle;
     _ending = false;
     notifyListeners();
+    await _cleanup();
+    // Fire-and-forget: send end signal after screen has already popped.
+    // If the TCP write blocks briefly, the UI is already responsive.
+    try {
+      if (pid != null) {
+        _piperNode.sendCallSignal(pid, 'call_end', '{}');
+      }
+    } catch (_) {}
   }
 
   // ── Media controls ──────────────────────────────────────────────────────────
@@ -272,7 +280,60 @@ class CallService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Device enumeration (desktop) ────────────────────────────────────────────
+  /// Switch audio output device during a call (desktop).
+  Future<void> setAudioOutput(String deviceId) async {
+    selectedSpeakerId = deviceId;
+    try {
+      await remoteRenderer.audioOutput(deviceId);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// Switch microphone during a call by replacing the audio track.
+  Future<void> setMicrophone(String deviceId) async {
+    selectedMicId = deviceId;
+    if (_pc == null || _localStream == null) return;
+    final newStream = await navigator.mediaDevices
+        .getUserMedia({'audio': {'deviceId': deviceId}, 'video': false});
+    final newTrack = newStream.getAudioTracks().first;
+    final senders = await _pc!.getSenders();
+    for (final sender in senders) {
+      if (sender.track?.kind == 'audio') {
+        await sender.replaceTrack(newTrack);
+      }
+    }
+    // Stop old audio tracks.
+    for (final t in _localStream!.getAudioTracks()) {
+      t.stop();
+      _localStream!.removeTrack(t);
+    }
+    _localStream!.addTrack(newTrack);
+    notifyListeners();
+  }
+
+  /// Switch camera during a call by replacing the video track.
+  Future<void> setCamera(String deviceId) async {
+    selectedCameraId = deviceId;
+    if (_pc == null || _localStream == null) return;
+    final newStream = await navigator.mediaDevices
+        .getUserMedia({'audio': false, 'video': {'deviceId': deviceId}});
+    final newTrack = newStream.getVideoTracks().first;
+    final senders = await _pc!.getSenders();
+    for (final sender in senders) {
+      if (sender.track?.kind == 'video') {
+        await sender.replaceTrack(newTrack);
+      }
+    }
+    for (final t in _localStream!.getVideoTracks()) {
+      t.stop();
+      _localStream!.removeTrack(t);
+    }
+    _localStream!.addTrack(newTrack);
+    localRenderer.srcObject = _localStream;
+    notifyListeners();
+  }
+
+  // ── Device enumeration ─────────────────────────────────────────────────────────
   Future<List<MediaDeviceInfo>> getAudioInputs() async {
     final devices = await navigator.mediaDevices.enumerateDevices();
     return devices.where((d) => d.kind == 'audioinput').toList();
@@ -340,10 +401,15 @@ class CallService extends ChangeNotifier {
             }));
       } catch (_) {}
     };
-    _pc!.onTrack = (e) {
+    _pc!.onTrack = (e) async {
       if (e.streams.isNotEmpty) {
         remoteRenderer.srcObject = e.streams.first;
+      } else {
+        // Some WebRTC implementations don't include streams in onTrack.
+        remoteRenderer.srcObject ??= await createLocalMediaStream('remote');
+        remoteRenderer.srcObject!.addTrack(e.track);
       }
+      notifyListeners();
     };
     _pc!.onIceConnectionState = (s) {
       if (s == RTCIceConnectionState.RTCIceConnectionStateConnected ||
@@ -421,5 +487,9 @@ class CallService extends ChangeNotifier {
     isMuted = false;
     isCameraOff = false;
     isSpeakerOn = false;
+    // Reset per-call device overrides so the next call uses defaults from prefs.
+    selectedMicId = null;
+    selectedCameraId = null;
+    selectedSpeakerId = null;
   }
 }

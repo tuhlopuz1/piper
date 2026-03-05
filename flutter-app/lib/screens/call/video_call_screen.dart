@@ -8,6 +8,7 @@ import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
 import '../../services/call_service.dart';
 import '../../widgets/app_avatar.dart';
+import '../../widgets/call_device_sheet.dart';
 
 AvatarStyle _avatarStyleForPeer(String peerId) {
   if (peerId.isEmpty) return AvatarStyle.violet;
@@ -69,38 +70,44 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       body: Stack(
         children: [
           // ── Remote video (full screen) ─────────────────────────────────────
+          // Always keep RTCVideoView in the tree so the Windows texture
+          // renderer attaches before onTrack fires.
           Positioned.fill(
-            child: cs.state == CallState.active
-                ? RTCVideoView(
-                    cs.remoteRenderer,
-                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  )
-                : Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          avatarStyle.color.withValues(alpha: 0.6),
-                          Colors.black,
-                        ],
-                      ),
-                    ),
-                    child: Center(
-                      child: AppAvatar(
-                        style: avatarStyle,
-                        initials: _initials(name),
-                        size: 110,
-                        isGroup: false,
-                      )
-                          .animate(onPlay: (c) => c.repeat(reverse: true))
-                          .scaleXY(
-                              end: 1.03,
-                              duration: 2000.ms,
-                              curve: Curves.easeInOut),
-                    ),
-                  ),
+            child: RTCVideoView(
+              cs.remoteRenderer,
+              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+            ),
           ),
+
+          // ── Connecting overlay (on top of video) ──────────────────────────
+          if (cs.state != CallState.active)
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      avatarStyle.color.withValues(alpha: 0.6),
+                      Colors.black,
+                    ],
+                  ),
+                ),
+                child: Center(
+                  child: AppAvatar(
+                    style: avatarStyle,
+                    initials: _initials(name),
+                    size: 110,
+                    isGroup: false,
+                  )
+                      .animate(onPlay: (c) => c.repeat(reverse: true))
+                      .scaleXY(
+                          end: 1.03,
+                          duration: 2000.ms,
+                          curve: Curves.easeInOut),
+                ),
+              ),
+            ),
 
           // ── Top overlay ────────────────────────────────────────────────────
           Positioned(
@@ -209,6 +216,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         : Icons.videocam_outlined,
                     active: cs.isCameraOff,
                     onTap: () => cs.toggleCamera(),
+                  ),
+                  _VideoButton(
+                    icon: Icons.surround_sound_rounded,
+                    onTap: () => showCallDeviceSheet(context),
                   ),
                 ],
               ),

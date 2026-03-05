@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(go vet ./core/ ./tui/)"
+      "Bash(go vet ./core/ ./tui/)",
+      "Bash(go build ./core/)",
+      "Bash(go vet ./core/)"
     ]
   }
 }

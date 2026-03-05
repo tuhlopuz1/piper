@@ -5,6 +5,7 @@ import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
 import '../../services/call_service.dart';
 import '../../widgets/app_avatar.dart';
+import '../../widgets/call_device_sheet.dart';
 
 class VoiceCallScreen extends StatefulWidget {
   const VoiceCallScreen({super.key});
@@ -139,16 +140,13 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
                       color: AppColors.destructive,
                       iconColor: Colors.white,
                       size: 68,
-                      onTap: () {
-                        cs.endCall();
-                        // _onCallState will pop when state → idle
-                      },
+                      onTap: () => cs.endCall(),
                     ),
                     _CallButton(
-                      icon: cs.isSpeakerOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-                      color: cs.isSpeakerOn ? AppColors.primary : AppColors.bgSubtle,
-                      iconColor: cs.isSpeakerOn ? Colors.white : AppColors.foreground,
-                      onTap: () => cs.toggleSpeaker(),
+                      icon: Icons.surround_sound_rounded,
+                      color: AppColors.bgSubtle,
+                      iconColor: AppColors.foreground,
+                      onTap: () => showCallDeviceSheet(context),
                     ),
                   ],
                 ),

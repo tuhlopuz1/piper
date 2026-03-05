@@ -163,15 +163,17 @@ func firstIP(v4, v6 []net.IP) net.IP {
 // ─── UDP broadcast ───────────────────────────────────────────────────────────
 
 func (d *Discovery) startUDP(ctx context.Context) error {
-	laddr := &net.UDPAddr{Port: udpBroadcastPort}
-	conn, err := net.ListenUDP("udp4", laddr)
+	// Use ListenConfig with SO_REUSEADDR so multiple instances can share the port.
+	lc := net.ListenConfig{}
+	pc, err := lc.ListenPacket(ctx, "udp4", fmt.Sprintf(":%d", udpBroadcastPort))
 	if err != nil {
 		// Port already in use is tolerable — another instance on same host.
-		conn, err = net.ListenUDP("udp4", &net.UDPAddr{Port: 0})
+		pc, err = lc.ListenPacket(ctx, "udp4", ":0")
 		if err != nil {
 			return err
 		}
 	}
+	conn := pc.(*net.UDPConn)
 	d.udpConn = conn
 
 	broadcastCtx, cancel := context.WithCancel(ctx)
@@ -184,6 +186,8 @@ func (d *Discovery) startUDP(ctx context.Context) error {
 
 func (d *Discovery) listenUDP(ctx context.Context) {
 	buf := make([]byte, 512)
+	// Our own payload for unicast replies.
+	selfPayload, _ := json.Marshal(announce{PeerID: d.peerID, Name: d.name, Port: d.port})
 	for {
 		d.udpConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		n, raddr, err := d.udpConn.ReadFromUDP(buf)
@@ -203,6 +207,13 @@ func (d *Discovery) listenUDP(ctx context.Context) {
 			continue // ourselves
 		}
 		d.onFound(a.PeerID, a.Name, raddr.IP, a.Port)
+
+		// Send a unicast reply directly to the sender so they can discover
+		// us even when their OS firewall blocks inbound broadcast packets.
+		// Because the sender previously sent outbound UDP from this address,
+		// their firewall treats our reply as a response and lets it through.
+		d.udpConn.SetWriteDeadline(time.Now().Add(time.Second))
+		d.udpConn.WriteToUDP(selfPayload, raddr)
 	}
 }
 
@@ -223,12 +234,23 @@ func (d *Discovery) sendUDP(ctx context.Context) {
 }
 
 func (d *Discovery) broadcastPayload(payload []byte) {
+	// Always try the global broadcast address — works on most Android devices
+	// even when per-subnet broadcast is filtered.
+	globalDst := &net.UDPAddr{IP: net.IPv4bcast, Port: udpBroadcastPort}
+	d.udpConn.SetWriteDeadline(time.Now().Add(time.Second))
+	d.udpConn.WriteToUDP(payload, globalDst)
+
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return
 	}
 	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagBroadcast == 0 {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		// Accept interfaces with either Broadcast or Multicast flag —
+		// some Android WiFi drivers only report FlagMulticast on wlan0.
+		if iface.Flags&net.FlagBroadcast == 0 && iface.Flags&net.FlagMulticast == 0 {
 			continue
 		}
 		addrs, err := iface.Addrs()
@@ -241,10 +263,10 @@ func (d *Discovery) broadcastPayload(payload []byte) {
 				continue
 			}
 			ip4 := ipnet.IP.To4()
-			if ip4 == nil {
+			if ip4 == nil || ip4.IsLoopback() {
 				continue
 			}
-			// Compute broadcast address: IP | ~mask
+			// Compute subnet broadcast address: IP | ~mask
 			broadcast := make(net.IP, 4)
 			for i := range broadcast {
 				broadcast[i] = ip4[i] | ^ipnet.Mask[i]
