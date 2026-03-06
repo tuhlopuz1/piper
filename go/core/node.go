@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -30,10 +31,10 @@ import (
 
 // Event is the sum type emitted on Node.Events().
 type Event struct {
-	Msg      *Message        // non-nil for incoming/outgoing messages (after decrypt)
-	Peer     *PeerEvent      // non-nil for peer join/leave notifications
-	Group    *GroupEvent     // non-nil for group lifecycle events
-	Transfer *TransferEvent  // non-nil for file transfer lifecycle events
+	Msg      *Message       // non-nil for incoming/outgoing messages (after decrypt)
+	Peer     *PeerEvent     // non-nil for peer join/leave notifications
+	Group    *GroupEvent    // non-nil for group lifecycle events
+	Transfer *TransferEvent // non-nil for file transfer lifecycle events
 }
 
 // Node is the central P2P object. It is safe for concurrent use.
@@ -55,6 +56,8 @@ type Node struct {
 	// connByPeerID maps peerID -> *conn (active TCP connection).
 	mu           sync.Mutex
 	connByPeerID map[string]*conn
+	discovered   map[string]peerEndpoint
+	connGen      map[string]uint64
 
 	eventCh chan Event
 	ctx     context.Context
@@ -67,6 +70,11 @@ type conn struct {
 	c      net.Conn
 	r      *bufio.Reader
 	mu     sync.Mutex // serialises writes
+}
+
+type peerEndpoint struct {
+	ip   net.IP
+	port int
 }
 
 func (c *conn) send(msg Message) error {
@@ -105,7 +113,9 @@ func NewNodeWithID(name, id string) *Node {
 		groups:       NewGroupManager(),
 		transfers:    NewTransferManager(),
 		connByPeerID: make(map[string]*conn),
-		eventCh:      make(chan Event, 128),
+		discovered:   make(map[string]peerEndpoint),
+		connGen:      make(map[string]uint64),
+		eventCh:      make(chan Event, 512),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -552,7 +562,10 @@ func (n *Node) pingLoop() {
 			n.mu.Unlock()
 			ping := Message{Type: MsgTypePing, PeerID: n.id, Timestamp: time.Now()}
 			for _, c := range conns {
-				c.send(ping)
+				if err := c.send(ping); err != nil {
+					log.Printf("[node] ping write to %s failed: %v", c.peerID[:8], err)
+					n.handleConnWriteError(c.peerID, c, "ping", err)
+				}
 			}
 		}
 	}
@@ -588,8 +601,16 @@ func (n *Node) Send(text string, toPeerID string) {
 }
 
 // SendCallSignal encrypts payload and sends a call-signaling message to toPeerID.
-// signalType must be one of: "call_offer", "call_answer", "call_reject", "call_end", "call_ice".
+// signalType must be one of:
+// "call_offer", "call_answer", "call_reject", "call_end", "call_ice", "call_busy", "call_ack".
 func (n *Node) SendCallSignal(toPeerID, signalType, payload string) error {
+	switch MsgType(signalType) {
+	case MsgTypeCallOffer, MsgTypeCallAnswer, MsgTypeCallReject, MsgTypeCallEnd,
+		MsgTypeCallIce, MsgTypeCallBusy, MsgTypeCallAck:
+	default:
+		return fmt.Errorf("unsupported call signal type %q", signalType)
+	}
+
 	peer := n.peers.Get(toPeerID)
 	if peer == nil {
 		return fmt.Errorf("unknown peer %s", toPeerID)
@@ -614,17 +635,35 @@ func (n *Node) SendCallSignal(toPeerID, signalType, payload string) error {
 		Timestamp: time.Now(),
 	}
 
-	n.mu.Lock()
-	cn := n.connByPeerID[toPeerID]
-	n.mu.Unlock()
-	if cn == nil {
-		return fmt.Errorf("no connection to peer %s", toPeerID[:8])
+	callID, seq := parseCallMeta(payload)
+	retryDelays := []time.Duration{0, 150 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond}
+	for attempt := 0; attempt < len(retryDelays); attempt++ {
+		if retryDelays[attempt] > 0 {
+			time.Sleep(retryDelays[attempt])
+		}
+
+		n.mu.Lock()
+		cn := n.connByPeerID[toPeerID]
+		gen := n.connGen[toPeerID]
+		n.mu.Unlock()
+
+		if cn == nil {
+			n.fastRedial(toPeerID)
+			log.Printf("[node] call signal no_conn peer_id=%s call_id=%s seq=%d signal_type=%s attempt=%d",
+				toPeerID, callID, seq, signalType, attempt)
+			continue
+		}
+		if err := cn.send(wireMsg); err != nil {
+			log.Printf("[node] call signal write fail peer_id=%s call_id=%s seq=%d signal_type=%s conn_gen=%d err=%v",
+				toPeerID, callID, seq, signalType, gen, err)
+			n.handleConnWriteError(toPeerID, cn, fmt.Sprintf("call:%s", signalType), err)
+			continue
+		}
+		log.Printf("[node] call signal ok peer_id=%s call_id=%s seq=%d signal_type=%s conn_gen=%d",
+			toPeerID, callID, seq, signalType, gen)
+		return nil
 	}
-	if err := cn.send(wireMsg); err != nil {
-		return fmt.Errorf("send call signal: %w", err)
-	}
-	log.Printf("[node] call signal %q → %s", signalType, peer.DisplayName)
-	return nil
+	return fmt.Errorf("send call signal: no connection to peer %s", toPeerID[:8])
 }
 
 // sendDirect encrypts text and unicasts it to the specified peer.
@@ -669,6 +708,7 @@ func (n *Node) sendDirect(text, toPeerID string) {
 	}
 	if err := cn.send(wireMsg); err != nil {
 		log.Printf("[node] sendDirect write to %s: %v", toPeerID[:8], err)
+		n.handleConnWriteError(toPeerID, cn, "direct", err)
 	}
 }
 
@@ -767,6 +807,8 @@ func (n *Node) completeHandshake(cn *conn, name string, theirPubKey []byte, addr
 		return
 	}
 	n.connByPeerID[cn.peerID] = cn
+	n.connGen[cn.peerID]++
+	gen := n.connGen[cn.peerID]
 	n.mu.Unlock()
 
 	info, _ := n.peers.Upsert(cn.peerID, name, addr, PeerConnected)
@@ -779,7 +821,7 @@ func (n *Node) completeHandshake(cn *conn, name string, theirPubKey []byte, addr
 			log.Printf("[node] ECDH with %s: %v", cn.peerID[:8], err)
 		} else {
 			n.peers.SetSharedKey(cn.peerID, shared)
-			log.Printf("[node] ECDH shared key established with %s (%s)", info.DisplayName, cn.peerID[:8])
+			log.Printf("[node] ECDH shared key established with %s (%s) conn_gen=%d", info.DisplayName, cn.peerID[:8], gen)
 		}
 	} else {
 		log.Printf("[node] peer %s sent no pubkey; direct messages will be unavailable", cn.peerID[:8])
@@ -855,7 +897,8 @@ func (n *Node) readLoop(cn *conn) {
 		case MsgTypeFileDone:
 			n.handleFileDone(msg)
 
-		case MsgTypeCallOffer, MsgTypeCallAnswer, MsgTypeCallReject, MsgTypeCallEnd, MsgTypeCallIce:
+		case MsgTypeCallOffer, MsgTypeCallAnswer, MsgTypeCallReject, MsgTypeCallEnd,
+			MsgTypeCallIce, MsgTypeCallBusy, MsgTypeCallAck:
 			if msg.To != n.id {
 				continue
 			}
@@ -1118,6 +1161,9 @@ func (n *Node) onDiscovered(peerID, name string, addr net.IP, port int) {
 	if peerID == n.id {
 		return
 	}
+	n.mu.Lock()
+	n.discovered[peerID] = peerEndpoint{ip: append(net.IP(nil), addr...), port: port}
+	n.mu.Unlock()
 	go n.dialPeer(peerID, name, addr, port)
 }
 
@@ -1130,6 +1176,46 @@ func (n *Node) maybeUpdatePeerName(peerID, name string) {
 	}
 	updated, _ := n.peers.Upsert(peerID, name, p.Addr, p.State)
 	n.emit(Event{Peer: &PeerEvent{Peer: updated, Kind: PeerJoined}})
+}
+
+func parseCallMeta(payload string) (callID string, seq int) {
+	var body map[string]any
+	if err := json.Unmarshal([]byte(payload), &body); err != nil {
+		return "", 0
+	}
+	callID, _ = body["call_id"].(string)
+	switch v := body["seq"].(type) {
+	case float64:
+		seq = int(v)
+	case int:
+		seq = v
+	}
+	return callID, seq
+}
+
+func (n *Node) handleConnWriteError(peerID string, cn *conn, op string, err error) {
+	if cn == nil {
+		n.fastRedial(peerID)
+		return
+	}
+	log.Printf("[node] conn write error op=%s peer_id=%s err=%v", op, peerID, err)
+	_ = cn.c.Close()
+	n.removeConn(peerID, cn)
+	n.fastRedial(peerID)
+}
+
+func (n *Node) fastRedial(peerID string) {
+	n.mu.Lock()
+	ep, ok := n.discovered[peerID]
+	n.mu.Unlock()
+	if !ok || ep.ip == nil || ep.port <= 0 {
+		return
+	}
+	peerName := peerID
+	if p := n.peers.Get(peerID); p != nil && p.Name != "" {
+		peerName = p.Name
+	}
+	go n.dialPeer(peerID, peerName, ep.ip, ep.port)
 }
 
 // isZeroKey reports whether a [32]byte key is all zeros (i.e. not yet set).

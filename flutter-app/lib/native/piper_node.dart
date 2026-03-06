@@ -224,8 +224,11 @@ class PiperNode {
   }
 
   void _handleNativeEvent(Pointer<Utf8> eventJSON) {
+    // Copy the string FIRST, then free the C memory.
+    // The Go event pump does NOT free this — Dart owns the lifetime
+    // because NativeCallable.listener is asynchronous.
     final jsonStr = eventJSON.toDartString();
-    // Go side frees the C string after the callback returns.
+    _bindings.freeString(eventJSON);
     try {
       final map = jsonDecode(jsonStr) as Map<String, dynamic>;
       final event = PiperEvent.fromJson(map);

@@ -19,11 +19,13 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _index = 0;
+  bool _incomingRouteVisible = false;
+  String? _displayedIncomingCallId;
 
   static const _items = [
-    (Icons.chat_bubble_outline_rounded, Icons.chat_bubble_rounded,    'Чаты'),
-    (Icons.people_outline_rounded,      Icons.people_rounded,          'Контакты'),
-    (Icons.settings_outlined,           Icons.settings_rounded,        'Настройки'),
+    (Icons.chat_bubble_outline_rounded, Icons.chat_bubble_rounded, 'Чаты'),
+    (Icons.people_outline_rounded, Icons.people_rounded, 'Контакты'),
+    (Icons.settings_outlined, Icons.settings_rounded, 'Настройки'),
   ];
 
   @override
@@ -44,19 +46,47 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _onCallState() {
     setState(() {});
-    if (CallService.instance.state == CallState.ringing) {
+    final cs = CallService.instance;
+    final callId = cs.currentCallId;
+
+    if (cs.state == CallState.ringing && callId != null) {
+      if (_incomingRouteVisible && _displayedIncomingCallId == callId) {
+        cs.recordUiDuplicateBlocked();
+        return;
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        Navigator.of(context).push(
+        final now = CallService.instance;
+        if (now.state != CallState.ringing || now.currentCallId != callId) {
+          _incomingRouteVisible = false;
+          return;
+        }
+        _incomingRouteVisible = true;
+        _displayedIncomingCallId = callId;
+        Navigator.of(context)
+            .push(
           MaterialPageRoute(
             fullscreenDialog: true,
             builder: (_) => IncomingCallScreen(
+              callId: callId,
               peerId: CallService.instance.peerId!,
               peerName: CallService.instance.peerName ?? 'Unknown',
               isVideo: CallService.instance.isVideoCall,
             ),
           ),
-        );
+        )
+            .whenComplete(() {
+          _incomingRouteVisible = false;
+        });
+      });
+      return;
+    }
+
+    if (_incomingRouteVisible && cs.state == CallState.idle) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        _incomingRouteVisible = false;
+        await Navigator.of(context).maybePop();
       });
     }
   }
@@ -65,9 +95,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _currentTab() {
     switch (_index) {
-      case 0: return ChatsTab();
-      case 1: return ContactsTab();
-      default: return SettingsTab();
+      case 0:
+        return ChatsTab();
+      case 1:
+        return ContactsTab();
+      default:
+        return SettingsTab();
     }
   }
 
@@ -84,9 +117,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final hasCall = CallService.instance.state == CallState.active ||
         CallService.instance.state == CallState.calling;
 
-    if (w >= 900) return _DesktopLayout(index: _index, onTap: _setIndex, hasCall: hasCall, body: body);
-    if (w >= 600) return _TabletLayout(index: _index, onTap: _setIndex, hasCall: hasCall, body: body);
-    return _MobileLayout(index: _index, onTap: _setIndex, hasCall: hasCall, body: body);
+    if (w >= 900) {
+      return _DesktopLayout(
+          index: _index, onTap: _setIndex, hasCall: hasCall, body: body);
+    }
+    if (w >= 600) {
+      return _TabletLayout(
+          index: _index, onTap: _setIndex, hasCall: hasCall, body: body);
+    }
+    return _MobileLayout(
+        index: _index, onTap: _setIndex, hasCall: hasCall, body: body);
   }
 }
 
@@ -98,7 +138,11 @@ class _MobileLayout extends StatelessWidget {
   final bool hasCall;
   final Widget body;
 
-  const _MobileLayout({required this.index, required this.onTap, required this.hasCall, required this.body});
+  const _MobileLayout(
+      {required this.index,
+      required this.onTap,
+      required this.hasCall,
+      required this.body});
 
   static const _items = _HomeScreenState._items;
 
@@ -134,7 +178,9 @@ class _MobileLayout extends StatelessWidget {
                         ),
                         child: Icon(
                           sel ? activeIcon : icon,
-                          color: sel ? AppColors.primary : AppColors.mutedForeground,
+                          color: sel
+                              ? AppColors.primary
+                              : AppColors.mutedForeground,
                           size: 22,
                         ),
                       ),
@@ -144,7 +190,9 @@ class _MobileLayout extends StatelessWidget {
                         style: GoogleFonts.inter(
                           fontSize: 10,
                           fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
-                          color: sel ? AppColors.primary : AppColors.mutedForeground,
+                          color: sel
+                              ? AppColors.primary
+                              : AppColors.mutedForeground,
                         ),
                         child: Text(label),
                       ),
@@ -182,7 +230,11 @@ class _TabletLayout extends StatelessWidget {
   final bool hasCall;
   final Widget body;
 
-  const _TabletLayout({required this.index, required this.onTap, required this.hasCall, required this.body});
+  const _TabletLayout(
+      {required this.index,
+      required this.onTap,
+      required this.hasCall,
+      required this.body});
 
   static const _items = _HomeScreenState._items;
 
@@ -207,7 +259,8 @@ class _TabletLayout extends StatelessWidget {
                       selectedIcon: Icon(activeIcon),
                       label: Text(
                         label,
-                        style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w500),
+                        style: GoogleFonts.inter(
+                            fontSize: 12, fontWeight: FontWeight.w500),
                       ),
                     );
                   }).toList(),
@@ -232,7 +285,11 @@ class _DesktopLayout extends StatelessWidget {
   final bool hasCall;
   final Widget body;
 
-  const _DesktopLayout({required this.index, required this.onTap, required this.hasCall, required this.body});
+  const _DesktopLayout(
+      {required this.index,
+      required this.onTap,
+      required this.hasCall,
+      required this.body});
 
   static const _items = _HomeScreenState._items;
 
@@ -322,9 +379,8 @@ class _DesktopLayout extends StatelessWidget {
                             label,
                             style: GoogleFonts.inter(
                               fontSize: 14,
-                              fontWeight: sel
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
+                              fontWeight:
+                                  sel ? FontWeight.w600 : FontWeight.w400,
                               color: sel
                                   ? AppColors.primary
                                   : AppColors.mutedForeground,
@@ -383,7 +439,9 @@ class _MinimizedCallBar extends StatelessWidget {
             end: Alignment.centerRight,
           ),
           border: Border(
-            top: BorderSide(color: AppColors.primaryLight.withValues(alpha: 0.3), width: 0.5),
+            top: BorderSide(
+                color: AppColors.primaryLight.withValues(alpha: 0.3),
+                width: 0.5),
           ),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -396,7 +454,8 @@ class _MinimizedCallBar extends StatelessWidget {
                 color: Colors.white.withValues(alpha: 0.18),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.mic_none_rounded, color: Colors.white, size: 16),
+              child: const Icon(Icons.mic_none_rounded,
+                  color: Colors.white, size: 16),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -436,7 +495,8 @@ class _MinimizedCallBar extends StatelessWidget {
                   color: Colors.white.withValues(alpha: 0.18),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.call_end_rounded, color: Colors.white, size: 15),
+                child: const Icon(Icons.call_end_rounded,
+                    color: Colors.white, size: 15),
               ),
             ),
           ],

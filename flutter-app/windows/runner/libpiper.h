@@ -88,25 +88,25 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
-extern __declspec(dllexport) int PiperCreateNode(char* name, char* nodeID);
-extern __declspec(dllexport) void PiperSetNodeName(int handle, char* name);
-extern __declspec(dllexport) char* PiperStartNode(int handle);
-extern __declspec(dllexport) void PiperStopNode(int handle);
-extern __declspec(dllexport) char* PiperNodeID(int handle);
-extern __declspec(dllexport) char* PiperNodeName(int handle);
-extern __declspec(dllexport) void PiperSend(int handle, char* text, char* toPeerID);
-extern __declspec(dllexport) void PiperSendGroup(int handle, char* text, char* groupID);
-extern __declspec(dllexport) char* PiperSendFile(int handle, char* peerID, char* filePath);
-extern __declspec(dllexport) char* PiperSendFileToGroup(int handle, char* groupID, char* filePath);
-extern __declspec(dllexport) char* PiperSendCallSignal(int handle, char* toPeerID, char* signalType, char* payload);
-extern __declspec(dllexport) char* PiperCreateGroup(int handle, char* name);
-extern __declspec(dllexport) void PiperInviteToGroup(int handle, char* groupID, char* peerID);
-extern __declspec(dllexport) void PiperLeaveGroup(int handle, char* groupID);
-extern __declspec(dllexport) char* PiperListPeers(int handle);
-extern __declspec(dllexport) char* PiperListGroups(int handle);
-extern __declspec(dllexport) void PiperSetEventCallback(int handle, EventCallback cb);
-extern __declspec(dllexport) void PiperSetDownloadsDir(int handle, char* dir);
-extern __declspec(dllexport) void PiperFreeString(char* s);
+extern int PiperCreateNode(char* name, char* nodeID);
+extern void PiperSetNodeName(int handle, char* name);
+extern char* PiperStartNode(int handle);
+extern void PiperStopNode(int handle);
+extern char* PiperNodeID(int handle);
+extern char* PiperNodeName(int handle);
+extern void PiperSend(int handle, char* text, char* toPeerID);
+extern void PiperSendGroup(int handle, char* text, char* groupID);
+extern char* PiperSendFile(int handle, char* peerID, char* filePath);
+extern char* PiperSendFileToGroup(int handle, char* groupID, char* filePath);
+extern char* PiperSendCallSignal(int handle, char* toPeerID, char* signalType, char* payload);
+extern char* PiperCreateGroup(int handle, char* name);
+extern void PiperInviteToGroup(int handle, char* groupID, char* peerID);
+extern void PiperLeaveGroup(int handle, char* groupID);
+extern char* PiperListPeers(int handle);
+extern char* PiperListGroups(int handle);
+extern void PiperSetEventCallback(int handle, EventCallback cb);
+extern void PiperSetDownloadsDir(int handle, char* dir);
+extern void PiperFreeString(char* s);
 
 #ifdef __cplusplus
 }

@@ -158,18 +158,25 @@ class PiperService extends ChangeNotifier {
   // ── Event handler ─────────────────────────────────────────────────────────
 
   void _onEvent(PiperEvent e) {
-    switch (e.type) {
-      case 'peer':
-        _refresh();
-      case 'group':
-        _refresh();
-      case 'message':
-        _addIncomingMessage(e);
-        notifyListeners();
-      case 'transfer':
-        _handleTransfer(e);
-      case 'call':
-        CallService.instance.handleSignal(e);
+    if (e.type == 'peer') {
+      _refresh();
+      return;
+    }
+    if (e.type == 'group') {
+      _refresh();
+      return;
+    }
+    if (e.type == 'message') {
+      _addIncomingMessage(e);
+      notifyListeners();
+      return;
+    }
+    if (e.type == 'transfer') {
+      _handleTransfer(e);
+      return;
+    }
+    if (e.type == 'call') {
+      CallService.instance.handleSignal(e);
     }
   }
 
@@ -333,9 +340,10 @@ class PiperService extends ChangeNotifier {
     if (_node == null) return;
 
     // Extract file name (handle both separators).
-    final name = filePath.replaceAll(r'\', '/').split('/').lastWhere(
-        (p) => p.isNotEmpty,
-        orElse: () => 'file');
+    final name = filePath
+        .replaceAll(r'\', '/')
+        .split('/')
+        .lastWhere((p) => p.isNotEmpty, orElse: () => 'file');
     final ext = name.contains('.') ? name.split('.').last.toUpperCase() : null;
 
     int? size;
@@ -468,8 +476,7 @@ class PiperService extends ChangeNotifier {
       if (msgs.isEmpty) continue;
 
       final livePeer = onlinePeerMap[peerId];
-      final name =
-          livePeer?.displayName ?? _chatNames[peerId] ?? peerId;
+      final name = livePeer?.displayName ?? _chatNames[peerId] ?? peerId;
 
       result.add(Chat(
         id: peerId,

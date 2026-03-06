@@ -312,8 +312,11 @@ func eventPump(e *nodeEntry) {
 				continue
 			}
 			cstr := C.CString(string(data))
+			// NOTE: Do NOT free cstr here. The Dart NativeCallable.listener
+			// callback runs asynchronously — it returns immediately, and Dart
+			// reads the string later on its event loop. Freeing here would be
+			// use-after-free. Dart frees via PiperFreeString after copying.
 			C.callEventCallback(e.cb, cstr)
-			C.free(unsafe.Pointer(cstr))
 		}
 	}
 }
@@ -354,7 +357,8 @@ func convertEvent(ev core.Event) ffiEvent {
 		// Call signaling messages are routed as "call" events, not "message".
 		switch m.Type {
 		case core.MsgTypeCallOffer, core.MsgTypeCallAnswer,
-			core.MsgTypeCallReject, core.MsgTypeCallEnd, core.MsgTypeCallIce:
+			core.MsgTypeCallReject, core.MsgTypeCallEnd, core.MsgTypeCallIce,
+			core.MsgTypeCallBusy, core.MsgTypeCallAck:
 			f.Type = "call"
 			f.MsgType = string(m.Type)
 			f.PeerID = m.PeerID

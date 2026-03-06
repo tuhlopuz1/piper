@@ -40,22 +40,24 @@ const (
 	MsgTypeCallReject MsgType = "call_reject" // callee → caller: {}
 	MsgTypeCallEnd    MsgType = "call_end"    // either side: {}
 	MsgTypeCallIce    MsgType = "call_ice"    // either side: {"candidate":"...","sdpMid":"...","sdpMLineIndex":0}
+	MsgTypeCallBusy   MsgType = "call_busy"   // callee/peer → caller: {"call_id":"...","reason":"busy"}
+	MsgTypeCallAck    MsgType = "call_ack"    // either side: {"call_id":"...","ack_seq":N,"ack_type":"call_end"}
 )
 
 // Message is the top-level protocol envelope exchanged between peers.
 // Wire format: 4-byte big-endian uint32 length prefix + JSON body.
 type Message struct {
-	ID        string    `json:"id"`
-	Type      MsgType   `json:"type"`
-	PeerID    string    `json:"peer_id"`              // sender's stable ID
-	Name      string    `json:"name"`                 // sender's display name
-	Content   string    `json:"content"`              // plaintext (Text) or base64 ciphertext (Direct)
-	To        string    `json:"to,omitempty"`         // peerID for direct; "" = global
-	PubKey    []byte    `json:"pub_key,omitempty"`    // X25519 public key (Hello only)
-	Nonce     []byte    `json:"nonce,omitempty"`      // ChaCha20-Poly1305 nonce (Direct / GroupText)
-	GroupID   string    `json:"group_id,omitempty"`   // group identifier (group messages)
-	GroupName string    `json:"group_name,omitempty"` // human-readable group name (GroupInvite)
-	Members   []string  `json:"members,omitempty"`    // current member IDs (GroupInvite)
+	ID        string   `json:"id"`
+	Type      MsgType  `json:"type"`
+	PeerID    string   `json:"peer_id"`              // sender's stable ID
+	Name      string   `json:"name"`                 // sender's display name
+	Content   string   `json:"content"`              // plaintext (Text) or base64 ciphertext (Direct)
+	To        string   `json:"to,omitempty"`         // peerID for direct; "" = global
+	PubKey    []byte   `json:"pub_key,omitempty"`    // X25519 public key (Hello only)
+	Nonce     []byte   `json:"nonce,omitempty"`      // ChaCha20-Poly1305 nonce (Direct / GroupText)
+	GroupID   string   `json:"group_id,omitempty"`   // group identifier (group messages)
+	GroupName string   `json:"group_name,omitempty"` // human-readable group name (GroupInvite)
+	Members   []string `json:"members,omitempty"`    // current member IDs (GroupInvite)
 
 	// File transfer fields
 	FileName   string `json:"file_name,omitempty"`   // original file name
