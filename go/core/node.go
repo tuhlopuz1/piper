@@ -23,6 +23,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,9 +62,21 @@ type Node struct {
 	discovered   map[string]peerEndpoint
 	connGen      map[string]uint64
 
+	seenMsgIDs sync.Map // msgID -> time.Time
+
+	routeMu    sync.RWMutex
+	routeTable map[string]routeEntry
+
 	eventCh chan Event
 	ctx     context.Context
 	cancel  context.CancelFunc
+}
+
+type routeEntry struct {
+	NextHop  string
+	Updated  time.Time
+	Hops     int
+	RelayVia string
 }
 
 // conn wraps a net.Conn and the framing reader/writer.
@@ -116,6 +130,7 @@ func NewNodeWithID(name, id string) *Node {
 		connByPeerID: make(map[string]*conn),
 		discovered:   make(map[string]peerEndpoint),
 		connGen:      make(map[string]uint64),
+		routeTable:   make(map[string]routeEntry),
 		eventCh:      make(chan Event, 512),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -227,6 +242,8 @@ func (n *Node) InviteToGroup(groupID, peerID string) {
 		GroupID:   groupID,
 		GroupName: g.Name,
 		Members:   g.MemberIDs(),
+		TTL:       5,
+		Origin:    n.id,
 		Timestamp: time.Now(),
 	}
 
@@ -252,6 +269,8 @@ func (n *Node) LeaveGroup(groupID string) {
 		PeerID:    n.id,
 		Name:      n.name,
 		GroupID:   groupID,
+		TTL:       5,
+		Origin:    n.id,
 		Timestamp: time.Now(),
 	}
 	n.sendToGroupMembers(g, leaveMsg)
@@ -275,6 +294,8 @@ func (n *Node) SendGroup(text, groupID string) {
 		Name:      n.name,
 		Content:   text,
 		GroupID:   groupID,
+		TTL:       5,
+		Origin:    n.id,
 		Timestamp: time.Now(),
 	}
 	n.emit(Event{Msg: &echo})
@@ -302,6 +323,8 @@ func (n *Node) SendGroup(text, groupID string) {
 			To:        memberID,
 			GroupID:   groupID,
 			Nonce:     nonce,
+			TTL:       5,
+			Origin:    n.id,
 			Timestamp: echo.Timestamp,
 		}
 		n.mu.Lock()
@@ -319,11 +342,9 @@ func (n *Node) sendToGroupMembers(g *Group, msg Message) {
 		if memberID == n.id {
 			continue
 		}
-		n.mu.Lock()
-		cn := n.connByPeerID[memberID]
-		n.mu.Unlock()
-		if cn != nil {
-			cn.send(msg)
+		msg.To = memberID
+		if !n.trySendUnicast(msg, memberID, "group-fanout") {
+			n.floodExcept(msg, "")
 		}
 	}
 }
@@ -372,6 +393,8 @@ func (n *Node) SendFile(peerID, filePath string) error {
 		TransferID: tid,
 		FileName:   info.Name(),
 		FileSize:   info.Size(),
+		TTL:        5,
+		Origin:     n.id,
 		Timestamp:  time.Now(),
 	}
 
@@ -448,6 +471,8 @@ func (n *Node) SendFileToGroup(groupID, filePath string) (sent int, _ error) {
 			TransferID: tid,
 			FileName:   info.Name(),
 			FileSize:   info.Size(),
+			TTL:        5,
+			Origin:     n.id,
 			Timestamp:  time.Now(),
 		}
 
@@ -527,6 +552,8 @@ func (n *Node) streamFileChunks(t *Transfer, key [32]byte, cn *conn) {
 				ChunkSeq:   seq,
 				ChunkData:  ct,
 				Nonce:      nonce,
+				TTL:        5,
+				Origin:     n.id,
 				Timestamp:  time.Now(),
 			}
 			if err := cn.send(msg); err != nil {
@@ -559,6 +586,8 @@ func (n *Node) streamFileChunks(t *Transfer, key [32]byte, cn *conn) {
 		To:         t.PeerID,
 		TransferID: t.ID,
 		FileHash:   hashHex,
+		TTL:        5,
+		Origin:     n.id,
 		Timestamp:  time.Now(),
 	}
 	if err := cn.send(done); err != nil {
@@ -574,7 +603,11 @@ func (n *Node) streamFileChunks(t *Transfer, key [32]byte, cn *conn) {
 
 // Start begins listening for incoming connections and starts discovery.
 func (n *Node) Start() error {
-	ln, err := net.Listen("tcp", ":0")
+	ln, err := net.Listen("tcp", ":47822")
+	if err != nil {
+		// Fallback for desktop tests where fixed port may already be in use.
+		ln, err = net.Listen("tcp", ":0")
+	}
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
@@ -584,6 +617,8 @@ func (n *Node) Start() error {
 
 	go n.acceptLoop()
 	go n.pingLoop()
+	go n.cleanSeenCache()
+	go n.cleanRouteTable()
 
 	n.discovery = NewDiscovery(n.id, n.name, n.port, n.onDiscovered)
 	if err := n.discovery.Start(n.ctx); err != nil {
@@ -703,6 +738,8 @@ func (n *Node) SendCallSignal(toPeerID, signalType, payload string) error {
 		Content:   ciphertext,
 		Nonce:     nonce,
 		To:        toPeerID,
+		TTL:       5,
+		Origin:    n.id,
 		Timestamp: time.Now(),
 	}
 
@@ -714,20 +751,12 @@ func (n *Node) SendCallSignal(toPeerID, signalType, payload string) error {
 		}
 
 		n.mu.Lock()
-		cn := n.connByPeerID[toPeerID]
 		gen := n.connGen[toPeerID]
 		n.mu.Unlock()
-
-		if cn == nil {
+		if sent := n.trySendUnicast(wireMsg, toPeerID, "call:"+signalType); !sent {
 			n.fastRedial(toPeerID)
 			log.Printf("[node] call signal no_conn peer_id=%s call_id=%s seq=%d signal_type=%s attempt=%d",
 				toPeerID, callID, seq, signalType, attempt)
-			continue
-		}
-		if err := cn.send(wireMsg); err != nil {
-			log.Printf("[node] call signal write fail peer_id=%s call_id=%s seq=%d signal_type=%s conn_gen=%d err=%v",
-				toPeerID, callID, seq, signalType, gen, err)
-			n.handleConnWriteError(toPeerID, cn, fmt.Sprintf("call:%s", signalType), err)
 			continue
 		}
 		log.Printf("[node] call signal ok peer_id=%s call_id=%s seq=%d signal_type=%s conn_gen=%d",
@@ -770,16 +799,9 @@ func (n *Node) sendDirect(text, toPeerID string) {
 	n.emit(Event{Msg: &echo})
 
 	// Send encrypted wire message.
-	n.mu.Lock()
-	cn := n.connByPeerID[toPeerID]
-	n.mu.Unlock()
-	if cn == nil {
-		log.Printf("[node] sendDirect: no connection to %s", toPeerID[:8])
-		return
-	}
-	if err := cn.send(wireMsg); err != nil {
-		log.Printf("[node] sendDirect write to %s: %v", toPeerID[:8], err)
-		n.handleConnWriteError(toPeerID, cn, "direct", err)
+	if sent := n.trySendUnicast(wireMsg, toPeerID, "direct"); !sent {
+		// Last resort: flood to direct neighbors with TTL.
+		n.floodExcept(wireMsg, "")
 	}
 }
 
@@ -897,8 +919,11 @@ func (n *Node) completeHandshake(cn *conn, name string, theirPubKey []byte, addr
 	} else {
 		log.Printf("[node] peer %s sent no pubkey; direct messages will be unavailable", cn.peerID[:8])
 	}
+	n.peers.SetRelay(cn.peerID, "", 1, false)
+	n.learnRoute(cn.peerID, cn.peerID, 1)
 
 	n.emit(Event{Peer: &PeerEvent{Peer: info, Kind: PeerJoined}})
+	n.sendPeerAnnounceFor(info, cn.peerID)
 }
 
 // ─── read loop ────────────────────────────────────────────────────────────────
@@ -920,14 +945,25 @@ func (n *Node) readLoop(cn *conn) {
 		}
 		cn.c.SetReadDeadline(time.Time{})
 
+		if msg.ID != "" {
+			if _, seen := n.seenMsgIDs.LoadOrStore(msg.ID, time.Now()); seen {
+				continue
+			}
+		}
+		n.learnRoute(msg.PeerID, cn.peerID, maxInt(1, len(msg.HopPath)))
+		if msg.Origin != "" && msg.Origin != n.id {
+			n.learnRoute(msg.Origin, cn.peerID, maxInt(1, len(msg.HopPath)))
+		}
+
 		switch msg.Type {
 		case MsgTypeText:
 			n.maybeUpdatePeerName(msg.PeerID, msg.Name)
 			n.emit(Event{Msg: &msg})
+			n.maybeForward(msg, cn.peerID)
 
 		case MsgTypeDirect:
 			if msg.To != n.id {
-				// Not addressed to us — shouldn't happen with unicast, but guard anyway.
+				n.maybeForward(msg, cn.peerID)
 				continue
 			}
 			peer := n.peers.Get(msg.PeerID)
@@ -945,32 +981,65 @@ func (n *Node) readLoop(cn *conn) {
 			n.emit(Event{Msg: &msg})
 
 		case MsgTypeGroupInvite:
+			if msg.To != "" && msg.To != n.id {
+				n.maybeForward(msg, cn.peerID)
+				continue
+			}
 			n.handleGroupInvite(msg, cn)
 
 		case MsgTypeGroupJoin:
+			if msg.To != "" && msg.To != n.id {
+				n.maybeForward(msg, cn.peerID)
+				continue
+			}
 			n.handleGroupJoin(msg)
 
 		case MsgTypeGroupLeave:
+			if msg.To != "" && msg.To != n.id {
+				n.maybeForward(msg, cn.peerID)
+				continue
+			}
 			n.handleGroupLeave(msg)
 
 		case MsgTypeGroupText:
+			if msg.To != n.id {
+				n.maybeForward(msg, cn.peerID)
+				continue
+			}
 			n.handleGroupText(msg)
 
 		case MsgTypeFileOffer:
+			if msg.To != n.id {
+				n.maybeForward(msg, cn.peerID)
+				continue
+			}
 			n.handleFileOffer(msg, cn)
 
 		case MsgTypeFileAccept:
+			if msg.To != n.id {
+				n.maybeForward(msg, cn.peerID)
+				continue
+			}
 			n.handleFileAccept(msg)
 
 		case MsgTypeFileChunk:
+			// For this release we do not relay heavy file chunks.
+			if msg.To != n.id {
+				continue
+			}
 			n.handleFileChunk(msg)
 
 		case MsgTypeFileDone:
+			if msg.To != n.id {
+				n.maybeForward(msg, cn.peerID)
+				continue
+			}
 			n.handleFileDone(msg)
 
 		case MsgTypeCallOffer, MsgTypeCallAnswer, MsgTypeCallReject, MsgTypeCallEnd,
 			MsgTypeCallIce, MsgTypeCallBusy, MsgTypeCallAck:
 			if msg.To != n.id {
+				n.maybeForward(msg, cn.peerID)
 				continue
 			}
 			peer := n.peers.Get(msg.PeerID)
@@ -985,6 +1054,14 @@ func (n *Node) readLoop(cn *conn) {
 			}
 			msg.Content = plaintext
 			n.emit(Event{Msg: &msg})
+
+		case MsgTypePeerAnnounce:
+			n.handlePeerAnnounce(msg, cn.peerID)
+			n.maybeForward(msg, cn.peerID)
+
+		case MsgTypeTopology:
+			n.handleTopology(msg, cn.peerID)
+			n.maybeForward(msg, cn.peerID)
 
 		case MsgTypePing:
 			cn.send(Message{Type: MsgTypePong, PeerID: n.id, Timestamp: time.Now()})
@@ -1022,6 +1099,8 @@ func (n *Node) handleGroupInvite(msg Message, cn *conn) {
 		PeerID:    n.id,
 		Name:      n.name,
 		GroupID:   msg.GroupID,
+		TTL:       5,
+		Origin:    n.id,
 		Timestamp: time.Now(),
 	}
 	cn.send(joinMsg)
@@ -1115,6 +1194,8 @@ func (n *Node) handleFileOffer(msg Message, cn *conn) {
 		Name:       n.name,
 		To:         msg.PeerID,
 		TransferID: msg.TransferID,
+		TTL:        5,
+		Origin:     n.id,
 		Timestamp:  time.Now(),
 	}
 	cn.send(accept)
@@ -1197,6 +1278,13 @@ func (n *Node) removeConn(peerID string, cn *conn) {
 	}
 	delete(n.connByPeerID, peerID)
 	n.mu.Unlock()
+	n.routeMu.Lock()
+	for target, rt := range n.routeTable {
+		if target == peerID || rt.NextHop == peerID {
+			delete(n.routeTable, target)
+		}
+	}
+	n.routeMu.Unlock()
 	n.peers.SetState(peerID, PeerDisconnected)
 	if info := n.peers.Get(peerID); info != nil {
 		n.emit(Event{Peer: &PeerEvent{Peer: info, Kind: PeerLeft}})
@@ -1220,6 +1308,214 @@ func (n *Node) broadcast(msg Message, skipID string) {
 	}
 }
 
+func (n *Node) cleanSeenCache() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-ticker.C:
+			cutoff := time.Now().Add(-30 * time.Minute)
+			n.seenMsgIDs.Range(func(key, value any) bool {
+				ts, ok := value.(time.Time)
+				if !ok || ts.Before(cutoff) {
+					n.seenMsgIDs.Delete(key)
+				}
+				return true
+			})
+		}
+	}
+}
+
+func (n *Node) cleanRouteTable() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-ticker.C:
+			cutoff := time.Now().Add(-5 * time.Minute)
+			n.routeMu.Lock()
+			for target, rt := range n.routeTable {
+				if rt.Updated.Before(cutoff) {
+					delete(n.routeTable, target)
+				}
+			}
+			n.routeMu.Unlock()
+		}
+	}
+}
+
+func (n *Node) learnRoute(target, via string, hops int) {
+	if target == "" || via == "" || target == n.id {
+		return
+	}
+	n.routeMu.Lock()
+	defer n.routeMu.Unlock()
+	prev, ok := n.routeTable[target]
+	if !ok || prev.NextHop == via || hops < prev.Hops {
+		n.routeTable[target] = routeEntry{
+			NextHop:  via,
+			Updated:  time.Now(),
+			Hops:     hops,
+			RelayVia: via,
+		}
+	}
+}
+
+func (n *Node) trySendUnicast(msg Message, targetPeerID, op string) bool {
+	n.mu.Lock()
+	direct := n.connByPeerID[targetPeerID]
+	n.mu.Unlock()
+	if direct != nil {
+		if err := direct.send(msg); err != nil {
+			log.Printf("[node] %s write to %s: %v", op, targetPeerID[:8], err)
+			n.handleConnWriteError(targetPeerID, direct, op, err)
+			return false
+		}
+		return true
+	}
+
+	n.routeMu.RLock()
+	rt, ok := n.routeTable[targetPeerID]
+	n.routeMu.RUnlock()
+	if !ok || rt.NextHop == "" {
+		return false
+	}
+
+	n.mu.Lock()
+	viaConn := n.connByPeerID[rt.NextHop]
+	n.mu.Unlock()
+	if viaConn == nil {
+		n.routeMu.Lock()
+		delete(n.routeTable, targetPeerID)
+		n.routeMu.Unlock()
+		return false
+	}
+	if err := viaConn.send(msg); err != nil {
+		log.Printf("[node] %s via %s to %s: %v", op, rt.NextHop[:8], targetPeerID[:8], err)
+		n.handleConnWriteError(rt.NextHop, viaConn, op, err)
+		n.routeMu.Lock()
+		delete(n.routeTable, targetPeerID)
+		n.routeMu.Unlock()
+		return false
+	}
+	return true
+}
+
+func (n *Node) canForwardType(msgType MsgType) bool {
+	switch msgType {
+	case MsgTypeHello, MsgTypePing, MsgTypePong, MsgTypeLeave:
+		return false
+	case MsgTypeFileChunk:
+		return false
+	default:
+		return true
+	}
+}
+
+func (n *Node) maybeForward(msg Message, sourcePeerID string) {
+	if !n.canForwardType(msg.Type) || msg.TTL <= 0 {
+		return
+	}
+	if msg.Origin == "" {
+		msg.Origin = msg.PeerID
+	}
+	msg.TTL--
+	msg.HopPath = append(slices.Clone(msg.HopPath), n.id)
+
+	if msg.To == "" {
+		n.floodExcept(msg, sourcePeerID)
+		return
+	}
+	if msg.To == n.id {
+		return
+	}
+	if sent := n.trySendUnicast(msg, msg.To, "relay"); sent {
+		return
+	}
+	n.floodExcept(msg, sourcePeerID)
+}
+
+func (n *Node) floodExcept(msg Message, excludePeerID string) {
+	n.mu.Lock()
+	type targetConn struct {
+		peerID string
+		cn     *conn
+	}
+	conns := make([]targetConn, 0, len(n.connByPeerID))
+	for peerID, cn := range n.connByPeerID {
+		if peerID == excludePeerID {
+			continue
+		}
+		conns = append(conns, targetConn{peerID: peerID, cn: cn})
+	}
+	n.mu.Unlock()
+
+	for _, entry := range conns {
+		if err := entry.cn.send(msg); err != nil {
+			log.Printf("[node] relay flood to %s: %v", entry.peerID[:8], err)
+			n.handleConnWriteError(entry.peerID, entry.cn, "relay-flood", err)
+		}
+	}
+}
+
+func (n *Node) sendPeerAnnounceFor(p *PeerInfo, excludePeerID string) {
+	if p == nil || len(p.PubKey) == 0 {
+		return
+	}
+	announce := Message{
+		ID:        uuid.NewString(),
+		Type:      MsgTypePeerAnnounce,
+		PeerID:    p.ID,
+		Name:      p.DisplayName,
+		PubKey:    p.PubKey,
+		TTL:       3,
+		Origin:    n.id,
+		Timestamp: time.Now(),
+	}
+	n.floodExcept(announce, excludePeerID)
+}
+
+func (n *Node) handlePeerAnnounce(msg Message, sourcePeerID string) {
+	if msg.PeerID == "" || msg.PeerID == n.id {
+		return
+	}
+	peer, _ := n.peers.Upsert(msg.PeerID, firstNonEmpty(msg.Name, msg.PeerID), nil, PeerConnected)
+	peer.State = PeerConnected
+	n.peers.SetRelay(msg.PeerID, sourcePeerID, maxInt(2, len(msg.HopPath)+1), true)
+	if len(msg.PubKey) == 32 {
+		n.peers.SetPubKey(msg.PeerID, msg.PubKey)
+		shared, err := SharedSecret(n.keyPair.Private, msg.PubKey)
+		if err == nil {
+			n.peers.SetSharedKey(msg.PeerID, shared)
+		}
+	}
+	n.learnRoute(msg.PeerID, sourcePeerID, maxInt(1, len(msg.HopPath)+1))
+	n.emit(Event{Peer: &PeerEvent{Peer: peer, Kind: PeerJoined}})
+}
+
+func (n *Node) handleTopology(msg Message, sourcePeerID string) {
+	parts := strings.Split(msg.Content, ",")
+	for _, raw := range parts {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		edge := strings.Split(trimmed, ">")
+		if len(edge) != 2 {
+			continue
+		}
+		target := strings.TrimSpace(edge[1])
+		if target == "" || target == n.id {
+			continue
+		}
+		n.learnRoute(target, sourcePeerID, maxInt(1, len(msg.HopPath)+1))
+	}
+}
+
 func (n *Node) emit(e Event) {
 	select {
 	case n.eventCh <- e:
@@ -1236,6 +1532,23 @@ func (n *Node) onDiscovered(peerID, name string, addr net.IP, port int) {
 	n.discovered[peerID] = peerEndpoint{ip: append(net.IP(nil), addr...), port: port}
 	n.mu.Unlock()
 	go n.dialPeer(peerID, name, addr, port)
+}
+
+// InjectDiscoveredPeer allows non-mDNS discovery providers (e.g. Android Wi-Fi Direct)
+// to feed endpoints into the same dial flow as built-in discovery.
+func (n *Node) InjectDiscoveredPeer(peerID, name string, addr net.IP, port int) {
+	n.onDiscovered(peerID, name, addr, port)
+}
+
+// RouteTableSnapshot returns target->nextHop entries for diagnostics/UI.
+func (n *Node) RouteTableSnapshot() map[string]string {
+	n.routeMu.RLock()
+	defer n.routeMu.RUnlock()
+	out := make(map[string]string, len(n.routeTable))
+	for target, rt := range n.routeTable {
+		out[target] = rt.NextHop
+	}
+	return out
 }
 
 // maybeUpdatePeerName updates a peer's display name if it changed, emitting a
@@ -1297,4 +1610,18 @@ func isZeroKey(key [32]byte) bool {
 		}
 	}
 	return true
+}
+
+func firstNonEmpty(primary, fallback string) string {
+	if primary != "" {
+		return primary
+	}
+	return fallback
+}
+
+func maxInt(a, b int) int {
+	if a >= b {
+		return a
+	}
+	return b
 }

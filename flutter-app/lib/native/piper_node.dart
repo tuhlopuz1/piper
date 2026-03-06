@@ -217,6 +217,17 @@ class PiperNode {
     return val;
   }
 
+  /// Inject externally discovered endpoint (e.g. Android Wi-Fi Direct peer).
+  void injectDiscoveredPeer(String peerID, String name, String ip, int port) {
+    final pidPtr = peerID.toNativeUtf8();
+    final namePtr = name.toNativeUtf8();
+    final ipPtr = ip.toNativeUtf8();
+    _bindings.injectDiscoveredPeer(_handle, pidPtr, namePtr, ipPtr, port);
+    malloc.free(pidPtr);
+    malloc.free(namePtr);
+    malloc.free(ipPtr);
+  }
+
   // ─── Queries ───────────────────────────────────────────────────────────────
 
   /// Get a snapshot of all known peers.
@@ -239,6 +250,15 @@ class PiperNode {
     return list
         .map((e) => GroupInfo.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  /// Get a topology snapshot of the current mesh graph.
+  MeshTopology get topology {
+    final ptr = _bindings.getTopology(_handle);
+    final jsonStr = ptr.toDartString();
+    _bindings.freeString(ptr);
+    final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+    return MeshTopology.fromJson(map);
   }
 
   // ─── Internal ──────────────────────────────────────────────────────────────

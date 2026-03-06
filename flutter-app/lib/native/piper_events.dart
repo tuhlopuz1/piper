@@ -2,7 +2,7 @@
 library;
 
 class PiperEvent {
-  final String type; // "message", "peer", "group", "transfer"
+  final String type; // "message", "peer", "group", "transfer", "call", "topology"
 
   // Message fields
   final String? msgId;
@@ -20,6 +20,10 @@ class PiperEvent {
 
   // Peer event fields
   final String? peerState; // "joined", "left"
+  final bool? isRelay;
+  final String? relayPeerId;
+  final String? relayPeerName;
+  final int? hops;
 
 
   // Group event fields
@@ -35,6 +39,9 @@ class PiperEvent {
   final int? progress;
   final String? transferError;
 
+  // Topology fields
+  final MeshTopology? topology;
+
   const PiperEvent({
     required this.type,
     this.msgId,
@@ -48,6 +55,10 @@ class PiperEvent {
     this.groupName,
     this.timestamp,
     this.peerState,
+    this.isRelay,
+    this.relayPeerId,
+    this.relayPeerName,
+    this.hops,
     this.groupEvent,
     this.members,
     this.transferId,
@@ -57,6 +68,7 @@ class PiperEvent {
     this.sending,
     this.progress,
     this.transferError,
+    this.topology,
   });
 
   factory PiperEvent.fromJson(Map<String, dynamic> json) {
@@ -73,6 +85,10 @@ class PiperEvent {
       groupName: json['group_name'] as String?,
       timestamp: json['ts'] as int?,
       peerState: json['peer_state'] as String?,
+      isRelay: json['is_relay'] as bool?,
+      relayPeerId: json['relay_peer_id'] as String?,
+      relayPeerName: json['relay_peer_name'] as String?,
+      hops: json['hops'] as int?,
       groupEvent: json['group_event'] as String?,
       members: (json['members'] as List<dynamic>?)
           ?.map((e) => e as String)
@@ -84,6 +100,9 @@ class PiperEvent {
       sending: json['sending'] as bool?,
       progress: json['progress'] as int?,
       transferError: json['transfer_error'] as String?,
+      topology: json['topology'] is Map<String, dynamic>
+          ? MeshTopology.fromJson(json['topology'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -92,6 +111,7 @@ class PiperEvent {
   bool get isGroup => type == 'group';
   bool get isTransfer => type == 'transfer';
   bool get isCall => type == 'call';
+  bool get isTopology => type == 'topology';
 }
 
 class PeerInfo {
@@ -99,12 +119,20 @@ class PeerInfo {
   final String name;
   final String displayName;
   final String state; // "connecting", "connected", "disconnected"
+  final bool isRelay;
+  final String? relayPeerId;
+  final String? relayPeerName;
+  final int hops;
 
   const PeerInfo({
     required this.id,
     required this.name,
     required this.displayName,
     required this.state,
+    required this.isRelay,
+    this.relayPeerId,
+    this.relayPeerName,
+    required this.hops,
   });
 
   factory PeerInfo.fromJson(Map<String, dynamic> json) {
@@ -113,10 +141,102 @@ class PeerInfo {
       name: json['name'] as String,
       displayName: json['display_name'] as String,
       state: json['state'] as String,
+      isRelay: json['is_relay'] as bool? ?? false,
+      relayPeerId: json['relay_peer_id'] as String?,
+      relayPeerName: json['relay_peer_name'] as String?,
+      hops: json['hops'] as int? ?? 1,
     );
   }
 
   bool get isConnected => state == 'connected';
+}
+
+class MeshTopology {
+  final String localId;
+  final List<MeshNode> nodes;
+  final List<MeshEdge> edges;
+
+  const MeshTopology({
+    required this.localId,
+    required this.nodes,
+    required this.edges,
+  });
+
+  factory MeshTopology.fromJson(Map<String, dynamic> json) {
+    return MeshTopology(
+      localId: json['local_id'] as String? ?? '',
+      nodes: (json['nodes'] as List<dynamic>? ?? const [])
+          .map((e) => MeshNode.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      edges: (json['edges'] as List<dynamic>? ?? const [])
+          .map((e) => MeshEdge.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+class MeshNode {
+  final String id;
+  final String name;
+  final bool isSelf;
+  final bool isConnected;
+  final bool isRelay;
+  final String? relayPeerId;
+  final String? relayPeerName;
+  final int hops;
+
+  const MeshNode({
+    required this.id,
+    required this.name,
+    required this.isSelf,
+    required this.isConnected,
+    required this.isRelay,
+    this.relayPeerId,
+    this.relayPeerName,
+    required this.hops,
+  });
+
+  factory MeshNode.fromJson(Map<String, dynamic> json) {
+    return MeshNode(
+      id: json['id'] as String,
+      name: json['name'] as String? ?? '',
+      isSelf: json['is_self'] as bool? ?? false,
+      isConnected: json['is_connected'] as bool? ?? false,
+      isRelay: json['is_relay'] as bool? ?? false,
+      relayPeerId: json['relay_peer_id'] as String?,
+      relayPeerName: json['relay_peer_name'] as String?,
+      hops: json['hops'] as int? ?? 1,
+    );
+  }
+}
+
+class MeshEdge {
+  final String from;
+  final String to;
+  final String kind;
+  final int hops;
+  final String? nextHop;
+  final bool isActive;
+
+  const MeshEdge({
+    required this.from,
+    required this.to,
+    required this.kind,
+    required this.hops,
+    this.nextHop,
+    required this.isActive,
+  });
+
+  factory MeshEdge.fromJson(Map<String, dynamic> json) {
+    return MeshEdge(
+      from: json['from'] as String,
+      to: json['to'] as String,
+      kind: json['kind'] as String? ?? 'direct',
+      hops: json['hops'] as int? ?? 1,
+      nextHop: json['next_hop'] as String?,
+      isActive: json['is_active'] as bool? ?? false,
+    );
+  }
 }
 
 class GroupInfo {

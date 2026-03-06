@@ -12,17 +12,20 @@ import '../native/piper_node.dart';
 import 'call_service.dart';
 import 'database_service.dart';
 import 'log_service.dart';
+import 'wifi_direct_service.dart';
 
 /// Singleton service that owns the Go PiperNode and exposes observable state.
 class PiperService extends ChangeNotifier {
   PiperNode? _node;
   StreamSubscription<PiperEvent>? _sub;
+  StreamSubscription<WifiDirectEndpoint>? _wifiSub;
 
   /// Non-null when Go library failed to load or node failed to start.
   String? initError;
 
   List<PeerInfo> _peers = [];
   List<GroupInfo> _groups = [];
+  MeshTopology _topology = const MeshTopology(localId: '', nodes: [], edges: []);
 
   /// Where received files are saved on this device.
   String _downloadsDir = '';
@@ -69,6 +72,7 @@ class PiperService extends ChangeNotifier {
 
   List<PeerInfo> get peers => List.unmodifiable(_peers);
   List<GroupInfo> get groups => List.unmodifiable(_groups);
+  MeshTopology get topology => _topology;
   Map<String, List<Message>> get messages => _messages;
 
   // ── Initialisation ────────────────────────────────────────────────────────
@@ -97,6 +101,11 @@ class PiperService extends ChangeNotifier {
       _node!.setDownloadsDir(_downloadsDir);
       _node!.start();
       _sub = _node!.events.listen(_onEvent);
+      await WifiDirectService.instance.init();
+      _wifiSub = WifiDirectService.instance.endpoints.listen((ep) {
+        _node?.injectDiscoveredPeer(ep.peerId, ep.name, ep.ip, ep.port);
+      });
+      await WifiDirectService.instance.startDiscovery();
       CallService.instance.init(_node!);
       CallService.instance.onCallEnded = _onCallEnded;
       await CallService.instance.loadDevicePreferences();
@@ -172,10 +181,16 @@ class PiperService extends ChangeNotifier {
     try {
       _peers = _node?.peers ?? [];
       _groups = _node?.groups ?? [];
+      _topology = _node?.topology ?? const MeshTopology(localId: '', nodes: [], edges: []);
     } catch (e) {
       LogService.instance.warning('[PiperService] refresh error: $e');
     }
     notifyListeners();
+  }
+
+  Future<void> refreshNetwork() async {
+    await WifiDirectService.instance.startDiscovery();
+    _refresh();
   }
 
   // ── Event handler ─────────────────────────────────────────────────────────
@@ -183,6 +198,15 @@ class PiperService extends ChangeNotifier {
   void _onEvent(PiperEvent e) {
     if (e.type == 'peer') {
       _refresh();
+      return;
+    }
+    if (e.type == 'topology') {
+      if (e.topology != null) {
+        _topology = e.topology!;
+        notifyListeners();
+      } else {
+        _refresh();
+      }
       return;
     }
     if (e.type == 'group') {
@@ -496,7 +520,9 @@ class PiperService extends ChangeNotifier {
   List<Contact> get contacts => _peers
       .map((p) => Contact(
             id: p.id,
-            name: p.displayName,
+            name: p.isRelay && (p.relayPeerName?.isNotEmpty == true)
+                ? '${p.displayName} (via ${p.relayPeerName})'
+                : p.displayName,
             avatarStyle: avatarStyleForPeer(p.id),
             initials: initialsFor(p.displayName),
             isOnline: p.isConnected,
@@ -582,6 +608,8 @@ class PiperService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _wifiSub?.cancel();
+    WifiDirectService.instance.dispose();
     _sub?.cancel();
     _node?.stop();
     super.dispose();

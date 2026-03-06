@@ -229,14 +229,29 @@ func TestThreeNodeRelay(t *testing.T) {
 	connectNodes(t, b, c)
 	drainEvents(c)
 
-	// A broadcasts; should reach C via B.
-	a.Send("relay_test", "")
+	drainEvents(b)
+	// A sends to C directly; should route via B.
+	a.Send("relay_test", c.id)
 
 	e := waitEvent(t, c, 5*time.Second, func(e Event) bool {
-		return e.Msg != nil && e.Msg.Type == MsgTypeText && e.Msg.Content == "relay_test"
+		return e.Msg != nil && e.Msg.Type == MsgTypeDirect && e.Msg.Content == "relay_test"
 	})
-	// After mesh is implemented, HopPath should contain B's ID.
-	_ = e
+	if len(e.Msg.HopPath) == 0 {
+		t.Fatalf("expected non-empty hop path")
+	}
+	foundRelay := false
+	for _, hop := range e.Msg.HopPath {
+		if hop == b.id {
+			foundRelay = true
+			break
+		}
+	}
+	if !foundRelay {
+		t.Fatalf("expected relay %s in hop_path=%v", b.id, e.Msg.HopPath)
+	}
+	expectNoEvent(t, b, 500*time.Millisecond, func(e Event) bool {
+		return e.Msg != nil && e.Msg.Type == MsgTypeDirect && e.Msg.Content == "relay_test"
+	})
 }
 
 // TestMessageDeduplication verifies the same message ID is not emitted twice.
@@ -251,8 +266,20 @@ func TestMessageDeduplication(t *testing.T) {
 	connectNodes(t, a, b)
 	drainEvents(b)
 
-	// Send one message. Bob should receive exactly once.
-	a.Send("dedup test", "")
+	// Inject the same on-wire message twice.
+	msg := NewTextMessage(a.id, a.name, "dedup test")
+	a.mu.Lock()
+	cn := a.connByPeerID[b.id]
+	a.mu.Unlock()
+	if cn == nil {
+		t.Fatal("no connection from A to B")
+	}
+	if err := cn.send(msg); err != nil {
+		t.Fatalf("send first: %v", err)
+	}
+	if err := cn.send(msg); err != nil {
+		t.Fatalf("send duplicate: %v", err)
+	}
 
 	// Wait for first delivery.
 	waitEvent(t, b, 3*time.Second, func(e Event) bool {
@@ -263,4 +290,67 @@ func TestMessageDeduplication(t *testing.T) {
 	expectNoEvent(t, b, 500*time.Millisecond, func(e Event) bool {
 		return e.Msg != nil && e.Msg.Content == "dedup test"
 	})
+}
+
+func TestTTLExpiry(t *testing.T) {
+	a := startTestNode(t, "A")
+	b := startTestNode(t, "B")
+	c := startTestNode(t, "C")
+	d := startTestNode(t, "D")
+
+	connectNodes(t, a, b)
+	connectNodes(t, b, c)
+	connectNodes(t, c, d)
+	drainEvents(d)
+
+	msg := NewTextMessage(a.id, a.name, "ttl-expiry")
+	msg.TTL = 1
+	a.mu.Lock()
+	cn := a.connByPeerID[b.id]
+	a.mu.Unlock()
+	if cn == nil {
+		t.Fatal("no connection A->B")
+	}
+	if err := cn.send(msg); err != nil {
+		t.Fatalf("send ttl msg: %v", err)
+	}
+
+	expectNoEvent(t, d, 2*time.Second, func(e Event) bool {
+		return e.Msg != nil && e.Msg.Content == "ttl-expiry"
+	})
+}
+
+func TestRouteInvalidationAfterRelayDisconnect(t *testing.T) {
+	a := startTestNode(t, "Alice")
+	b := startTestNode(t, "Bob")
+	c := startTestNode(t, "Charlie")
+
+	connectNodes(t, a, b)
+	connectNodes(t, b, c)
+	drainEvents(a)
+	drainEvents(c)
+
+	a.Send("prime-route", c.id)
+	waitEvent(t, c, 5*time.Second, func(e Event) bool {
+		return e.Msg != nil && e.Msg.Type == MsgTypeDirect && e.Msg.Content == "prime-route"
+	})
+
+	a.routeMu.RLock()
+	_, hasRoute := a.routeTable[c.id]
+	a.routeMu.RUnlock()
+	if !hasRoute {
+		t.Fatalf("expected route from A to C via relay")
+	}
+
+	b.Stop()
+	waitEvent(t, a, 10*time.Second, func(e Event) bool {
+		return e.Peer != nil && e.Peer.Kind == PeerLeft && e.Peer.Peer.ID == b.id
+	})
+
+	a.routeMu.RLock()
+	_, hasRoute = a.routeTable[c.id]
+	a.routeMu.RUnlock()
+	if hasRoute {
+		t.Fatalf("expected route to C to be purged after relay left")
+	}
 }

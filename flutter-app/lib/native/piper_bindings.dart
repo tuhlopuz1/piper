@@ -76,6 +76,14 @@ typedef _GetPeerIPDart = Pointer<Utf8> Function(int handle, Pointer<Utf8> peerID
 typedef _GetTURNPortC = Int32 Function(Int32 handle);
 typedef _GetTURNPortDart = int Function(int handle);
 
+typedef _InjectDiscoveredPeerC = Void Function(
+    Int32 handle, Pointer<Utf8> peerID, Pointer<Utf8> name, Pointer<Utf8> ip, Int32 port);
+typedef _InjectDiscoveredPeerDart = void Function(
+    int handle, Pointer<Utf8> peerID, Pointer<Utf8> name, Pointer<Utf8> ip, int port);
+
+typedef _GetTopologyC = Pointer<Utf8> Function(Int32 handle);
+typedef _GetTopologyDart = Pointer<Utf8> Function(int handle);
+
 typedef _FreeStringC = Void Function(Pointer<Utf8> s);
 typedef _FreeStringDart = void Function(Pointer<Utf8> s);
 
@@ -103,6 +111,8 @@ class PiperBindings {
   late final _LocalIPsDart localIPs;
   late final _GetPeerIPDart getPeerIP;
   late final _GetTURNPortDart getTURNPort;
+  late final _InjectDiscoveredPeerDart injectDiscoveredPeer;
+  late final _GetTopologyDart getTopology;
   late final _FreeStringDart freeString;
 
   PiperBindings({String? libraryPath}) {
@@ -150,6 +160,10 @@ class PiperBindings {
         .lookupFunction<_GetPeerIPC, _GetPeerIPDart>('PiperGetPeerIP');
     getTURNPort = _lib
         .lookupFunction<_GetTURNPortC, _GetTURNPortDart>('PiperGetTURNPort');
+    injectDiscoveredPeer = _lib.lookupFunction<_InjectDiscoveredPeerC, _InjectDiscoveredPeerDart>(
+        'PiperInjectDiscoveredPeer');
+    getTopology = _lib
+        .lookupFunction<_GetTopologyC, _GetTopologyDart>('PiperGetTopology');
     freeString = _lib
         .lookupFunction<_FreeStringC, _FreeStringDart>('PiperFreeString');
   }

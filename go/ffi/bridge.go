@@ -8,6 +8,7 @@ import "C"
 import (
 	"encoding/json"
 	"log"
+	"net"
 	"sync"
 	"unsafe"
 
@@ -34,7 +35,7 @@ type nodeEntry struct {
 // ─── JSON types for events ───────────────────────────────────────────────────
 
 type ffiEvent struct {
-	Type string `json:"type"` // "message", "peer", "group", "transfer"
+	Type string `json:"type"` // "message", "peer", "group", "transfer", "call", "topology"
 
 	// Message fields
 	MsgID     string `json:"msg_id,omitempty"`
@@ -49,7 +50,11 @@ type ffiEvent struct {
 	Timestamp int64  `json:"ts,omitempty"`
 
 	// Peer event fields
-	PeerState string `json:"peer_state,omitempty"` // "joined", "left"
+	PeerState     string `json:"peer_state,omitempty"` // "joined", "left"
+	IsRelay       bool   `json:"is_relay,omitempty"`
+	RelayPeerID   string `json:"relay_peer_id,omitempty"`
+	RelayPeerName string `json:"relay_peer_name,omitempty"`
+	Hops          int    `json:"hops,omitempty"`
 
 	// Group event fields
 	GroupEventKind string   `json:"group_event,omitempty"` // "created","member_joined","member_left","deleted"
@@ -63,6 +68,9 @@ type ffiEvent struct {
 	Sending       bool   `json:"sending,omitempty"`
 	Progress      int64  `json:"progress,omitempty"`
 	TransferError string `json:"transfer_error,omitempty"`
+
+	// Topology fields
+	Topology *core.MeshTopology `json:"topology,omitempty"`
 }
 
 type ffiPeer struct {
@@ -70,6 +78,10 @@ type ffiPeer struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
 	State       string `json:"state"` // "connecting", "connected", "disconnected"
+	IsRelay     bool   `json:"is_relay,omitempty"`
+	RelayPeerID string `json:"relay_peer_id,omitempty"`
+	RelayPeerName string `json:"relay_peer_name,omitempty"`
+	Hops        int    `json:"hops,omitempty"`
 }
 
 type ffiGroup struct {
@@ -277,6 +289,33 @@ func PiperGetTURNPort(handle C.int) C.int {
 	return C.int(e.node.TURNPort())
 }
 
+// PiperInjectDiscoveredPeer feeds an externally-discovered endpoint (e.g. Wi-Fi Direct)
+// into the same Node discovery pipeline as mDNS/UDP discovery.
+//
+//export PiperInjectDiscoveredPeer
+func PiperInjectDiscoveredPeer(handle C.int, peerID, name, ip *C.char, port C.int) {
+	e := getEntry(handle)
+	if e == nil {
+		return
+	}
+	parsed := net.ParseIP(C.GoString(ip))
+	if parsed == nil || int(port) <= 0 {
+		return
+	}
+	e.node.InjectDiscoveredPeer(C.GoString(peerID), C.GoString(name), parsed, int(port))
+}
+
+//export PiperGetTopology
+func PiperGetTopology(handle C.int) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString(`{"local_id":"","nodes":[],"edges":[]}`)
+	}
+	snap := e.node.TopologySnapshot()
+	data, _ := json.Marshal(snap)
+	return C.CString(string(data))
+}
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 //export PiperListPeers
@@ -287,12 +326,20 @@ func PiperListPeers(handle C.int) *C.char {
 	}
 	peers := e.node.Peers()
 	out := make([]ffiPeer, len(peers))
+	relayNameByID := map[string]string{}
+	for _, p := range peers {
+		relayNameByID[p.ID] = p.DisplayName
+	}
 	for i, p := range peers {
 		out[i] = ffiPeer{
 			ID:          p.ID,
 			Name:        p.Name,
 			DisplayName: p.DisplayName,
 			State:       peerStateStr(p.State),
+			IsRelay:     p.IsRelay,
+			RelayPeerID: p.RelayVia,
+			RelayPeerName: relayNameByID[p.RelayVia],
+			Hops:        p.RelayHops,
 		}
 	}
 	data, _ := json.Marshal(out)
@@ -349,19 +396,30 @@ func eventPump(e *nodeEntry) {
 				continue
 			}
 			fev := convertEvent(ev, e.node)
-			data, err := json.Marshal(fev)
-			if err != nil {
-				log.Printf("[ffi] marshal event: %v", err)
-				continue
+			sendFFIEvent(e.cb, fev)
+			if ev.Peer != nil {
+				topo := e.node.TopologySnapshot()
+				sendFFIEvent(e.cb, ffiEvent{
+					Type:     "topology",
+					Topology: &topo,
+				})
 			}
-			cstr := C.CString(string(data))
-			// NOTE: Do NOT free cstr here. The Dart NativeCallable.listener
-			// callback runs asynchronously — it returns immediately, and Dart
-			// reads the string later on its event loop. Freeing here would be
-			// use-after-free. Dart frees via PiperFreeString after copying.
-			C.callEventCallback(e.cb, cstr)
 		}
 	}
+}
+
+func sendFFIEvent(cb C.EventCallback, event ffiEvent) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("[ffi] marshal event: %v", err)
+		return
+	}
+	cstr := C.CString(string(data))
+	// NOTE: Do NOT free cstr here. The Dart NativeCallable.listener
+	// callback runs asynchronously — it returns immediately, and Dart
+	// reads the string later on its event loop. Freeing here would be
+	// use-after-free. Dart frees via PiperFreeString after copying.
+	C.callEventCallback(cb, cstr)
 }
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -429,6 +487,14 @@ func convertEvent(ev core.Event, node *core.Node) ffiEvent {
 		f.Type = "peer"
 		f.PeerID = ev.Peer.Peer.ID
 		f.PeerName = ev.Peer.Peer.DisplayName
+		f.IsRelay = ev.Peer.Peer.IsRelay
+		f.RelayPeerID = ev.Peer.Peer.RelayVia
+		f.Hops = ev.Peer.Peer.RelayHops
+		if node != nil {
+			if via := node.PeerByID(ev.Peer.Peer.RelayVia); via != nil {
+				f.RelayPeerName = via.DisplayName
+			}
+		}
 		switch ev.Peer.Kind {
 		case core.PeerJoined:
 			f.PeerState = "joined"
