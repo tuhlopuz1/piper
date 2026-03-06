@@ -6,6 +6,7 @@ import '../../services/theme_notifier.dart';
 import '../call/incoming_call_screen.dart';
 import '../call/voice_call_screen.dart';
 import '../call/video_call_screen.dart';
+import 'tabs/calls_tab.dart';
 import 'tabs/chats_tab.dart';
 import 'tabs/contacts_tab.dart';
 import 'tabs/settings_tab.dart';
@@ -24,6 +25,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   static const _items = [
     (Icons.chat_bubble_outline_rounded, Icons.chat_bubble_rounded, 'Чаты'),
+    (Icons.phone_outlined, Icons.phone_rounded, 'Звонки'),
     (Icons.people_outline_rounded, Icons.people_rounded, 'Контакты'),
     (Icons.settings_outlined, Icons.settings_rounded, 'Настройки'),
   ];
@@ -96,11 +98,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _currentTab() {
     switch (_index) {
       case 0:
-        return ChatsTab();
+        return const ChatsTab();
       case 1:
-        return ContactsTab();
+        return const CallsTab();
+      case 2:
+        return const ContactsTab();
       default:
-        return SettingsTab();
+        return const SettingsTab();
     }
   }
 

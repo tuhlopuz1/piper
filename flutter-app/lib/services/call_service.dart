@@ -32,6 +32,26 @@ class CallSession {
   });
 }
 
+class CallRecord {
+  final String peerId;
+  final String peerName;
+  final CallDirection direction;
+  final bool isVideo;
+  final int durationSeconds;
+  final bool answered; // false = missed or rejected
+  final DateTime time;
+
+  const CallRecord({
+    required this.peerId,
+    required this.peerName,
+    required this.direction,
+    required this.isVideo,
+    required this.durationSeconds,
+    required this.answered,
+    required this.time,
+  });
+}
+
 class _PendingAck {
   final String callId;
   final int seq;
@@ -111,6 +131,32 @@ class CallService extends ChangeNotifier {
   final Random _rng = Random();
   bool _ending = false;
 
+  // ── WiFi Direct / supplementary ICE candidate injection ──────────────────
+  // On Android hotspot mode, libwebrtc does not enumerate the AP interface
+  // (e.g. 192.168.43.1). We capture the first gathered UDP port and advertise
+  // ALL local IPs at that port via trickle ICE so the connected peer can reach
+  // us on the AP interface (whose socket may be bound to 0.0.0.0).
+  int? _capturedIcePort;
+  String? _capturedIceSdpMid;
+  int _capturedIceSdpMLineIndex = 0;
+  final Set<String> _advertisedIceIPs = {};
+
+  // ── ICE restart ───────────────────────────────────────────────────────────
+  // When ICE fails (e.g. wrong interface selected first), we attempt up to
+  // _maxIceRestarts restarts before giving up and ending the call.
+  int _iceRestartAttempts = 0;
+  static const int _maxIceRestarts = 2;
+
+  /// Called when a call ends with a record of what happened.
+  void Function(CallRecord record)? onCallEnded;
+  // Snapshot of call metadata captured at session start, used to build CallRecord.
+  String? _sessionPeerId;
+  String? _sessionPeerName;
+  bool _sessionIsVideo = false;
+  CallDirection? _sessionDirection;
+  DateTime? _sessionStartedAt;
+  bool _sessionWasAnswered = false;
+
   final Map<String, int> _counters = <String, int>{
     'call_offer_sent': 0,
     'call_offer_received': 0,
@@ -123,10 +169,42 @@ class CallService extends ChangeNotifier {
 
   final ListQueue<String> _eventLog = ListQueue<String>();
 
-  static const _rtcConfig = {
-    'iceServers': <Map<String, dynamic>>[],
+  // Base WebRTC config — iceServers is populated dynamically per call via
+  // _buildRtcConfig() which adds local TURN relay entries for every local IP.
+  static const _baseRtcConfig = {
     'iceTransportPolicy': 'all',
+    'bundlePolicy': 'max-bundle',
+    'rtcpMuxPolicy': 'require',
+    'iceCandidatePoolSize': 4,
   };
+
+  /// Build the RTCConfiguration for this call.
+  ///
+  /// For each non-loopback local IP we add a TURN entry pointing at our own
+  /// TURN server.  This guarantees that libwebrtc generates relay ICE
+  /// candidates even for interfaces it cannot enumerate directly (e.g. the
+  /// WiFi hotspot AP interface on Android), because Go's TURN server binds to
+  /// 0.0.0.0 and is therefore reachable on every local IP.
+  Map<String, dynamic> _buildRtcConfig() {
+    final List<Map<String, dynamic>> iceServers = [];
+    try {
+      final turnPort = _piperNode.getTURNPort();
+      if (turnPort > 0) {
+        final localIPs = _piperNode.localIPs();
+        for (final ip in localIPs) {
+          iceServers.add({
+            'urls': ['turn:$ip:$turnPort'],
+            'username': 'piperturn',
+            'credential': 'piperturnpw',
+          });
+        }
+      }
+    } catch (_) {}
+    return {
+      ..._baseRtcConfig,
+      'iceServers': iceServers,
+    };
+  }
 
   String? get currentCallId => _session?.callId;
   Map<String, int> get counters => Map.unmodifiable(_counters);
@@ -167,6 +245,13 @@ class CallService extends ChangeNotifier {
     );
     _session = session;
     _localSeq = 0;
+
+    _sessionPeerId = peerId;
+    _sessionPeerName = peerName;
+    _sessionIsVideo = isVideo;
+    _sessionDirection = CallDirection.outgoing;
+    _sessionStartedAt = DateTime.now();
+    _sessionWasAnswered = false;
 
     state = CallState.calling;
     _startOfferWatchdog(session.callId);
@@ -499,7 +584,7 @@ class CallService extends ChangeNotifier {
 
   Future<void> _setupPeerConnection() async {
     await initRenderers();
-    _pc = await createPeerConnection(_rtcConfig);
+    _pc = await createPeerConnection(_buildRtcConfig());
 
     _pc!.onIceCandidate = (c) {
       if (c.candidate == null || _session == null) return;
@@ -509,6 +594,10 @@ class CallService extends ChangeNotifier {
         'sdpMLineIndex': c.sdpMLineIndex,
       });
       _flushOutgoingIceQueue();
+      // Capture the first UDP host candidate's port so we can advertise
+      // supplementary candidates for interfaces libwebrtc didn't enumerate
+      // (e.g. WiFi hotspot AP interface on Android).
+      _tryCapturIcePort(c.candidate!, c.sdpMid ?? '0', c.sdpMLineIndex ?? 0);
     };
 
     _pc!.onTrack = (e) async {
@@ -527,6 +616,7 @@ class CallService extends ChangeNotifier {
           s == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         if (state != CallState.active) {
           state = CallState.active;
+          _sessionWasAnswered = true;
           _startTimer();
           _cancelOfferAndRingTimers();
           _touchSignal();
@@ -534,8 +624,14 @@ class CallService extends ChangeNotifier {
           notifyListeners();
         }
       } else if (s == RTCIceConnectionState.RTCIceConnectionStateFailed) {
-        _inc('call_stuck_state_recovered');
-        unawaited(endCall());
+        if (_iceRestartAttempts < _maxIceRestarts && _session != null) {
+          _iceRestartAttempts++;
+          _log('ICE failed — restart attempt $_iceRestartAttempts/$_maxIceRestarts');
+          unawaited(_tryIceRestart());
+        } else {
+          _inc('call_stuck_state_recovered');
+          unawaited(endCall());
+        }
       }
     };
   }
@@ -544,6 +640,25 @@ class CallService extends ChangeNotifier {
     final incomingPeerId = e.peerId!;
     final incomingPeerName = e.peerName ?? 'Unknown';
     final callId = (data['call_id'] as String?) ?? _newCallId();
+    final isRestart = data['restart'] == true;
+
+    // ICE restart: re-negotiate without re-ringing.
+    if (isRestart &&
+        state == CallState.active &&
+        _session?.callId == callId &&
+        _pc != null) {
+      _log('ICE restart offer received — re-answering');
+      try {
+        final offer = RTCSessionDescription(data['sdp'] as String?, 'offer');
+        await _pc!.setRemoteDescription(offer);
+        final answer = await _pc!.createAnswer();
+        await _pc!.setLocalDescription(answer);
+        await _sendSignal('call_answer', {'sdp': answer.sdp, 'restart': true});
+      } catch (err) {
+        _log('ICE restart re-answer error: $err');
+      }
+      return;
+    }
 
     if (state != CallState.idle || _session != null) {
       await _sendRawSignal(
@@ -572,6 +687,14 @@ class CallService extends ChangeNotifier {
     peerName = incomingPeerName;
     _incomingOffer = RTCSessionDescription(data['sdp'] as String?, 'offer');
     callError = null;
+
+    _sessionPeerId = incomingPeerId;
+    _sessionPeerName = incomingPeerName;
+    _sessionIsVideo = isVideoCall;
+    _sessionDirection = CallDirection.incoming;
+    _sessionStartedAt = DateTime.now();
+    _sessionWasAnswered = false;
+
     state = CallState.ringing;
     _inc('call_offer_received');
 
@@ -803,12 +926,27 @@ class CallService extends ChangeNotifier {
     _ringTimer = null;
   }
 
+  void _emitCallRecord() {
+    if (_sessionPeerId == null || _sessionDirection == null) return;
+    final record = CallRecord(
+      peerId: _sessionPeerId!,
+      peerName: _sessionPeerName ?? 'Unknown',
+      direction: _sessionDirection!,
+      isVideo: _sessionIsVideo,
+      durationSeconds: callDurationSeconds,
+      answered: _sessionWasAnswered,
+      time: _sessionStartedAt ?? DateTime.now(),
+    );
+    onCallEnded?.call(record);
+  }
+
   Future<void> _failAndReset(String reason) async {
     _log(reason);
     await _resetToIdle();
   }
 
   Future<void> _resetToIdle() async {
+    _emitCallRecord();
     _clearSessionForIdle();
     state = CallState.idle;
     notifyListeners();
@@ -885,6 +1023,19 @@ class CallService extends ChangeNotifier {
     selectedMicId = null;
     selectedCameraId = null;
     selectedSpeakerId = null;
+
+    _sessionPeerId = null;
+    _sessionPeerName = null;
+    _sessionIsVideo = false;
+    _sessionDirection = null;
+    _sessionStartedAt = null;
+    _sessionWasAnswered = false;
+
+    _capturedIcePort = null;
+    _capturedIceSdpMid = null;
+    _capturedIceSdpMLineIndex = 0;
+    _advertisedIceIPs.clear();
+    _iceRestartAttempts = 0;
   }
 
   Future<MediaStream> _getUserMedia(bool isVideo) {
@@ -997,6 +1148,101 @@ class CallService extends ChangeNotifier {
         }
       }
     }());
+  }
+
+  // ── WiFi Direct: supplementary ICE candidate injection ───────────────────
+
+  /// Captures the UDP port from the first host candidate libwebrtc generates.
+  /// Once we have the port, we schedule sending supplementary candidates for
+  /// all local IPs that libwebrtc missed (e.g. the WiFi AP interface).
+  void _tryCapturIcePort(String candidate, String sdpMid, int sdpMLineIndex) {
+    if (_capturedIcePort != null) return;
+    // Format: candidate:X COMP udp PRIORITY IP PORT typ TYPE [...]
+    final parts = candidate.split(' ');
+    if (parts.length < 8) return;
+    final proto = parts[2].toLowerCase();
+    final typIdx = parts.indexOf('typ');
+    if (proto != 'udp' || typIdx < 0 || parts[typIdx + 1] != 'host') return;
+    final port = int.tryParse(parts[5]);
+    if (port == null || port == 0) return;
+
+    _capturedIcePort = port;
+    _capturedIceSdpMid = sdpMid;
+    _capturedIceSdpMLineIndex = sdpMLineIndex;
+
+    // Small delay so normal candidates are enqueued first.
+    Future<void>.delayed(const Duration(milliseconds: 150), _sendSupplementaryCandidates);
+  }
+
+  /// Sends host ICE candidates for local IPs that libwebrtc didn't enumerate,
+  /// using the already-captured UDP port. This is a no-op if the port hasn't
+  /// been captured yet or the session is gone.
+  Future<void> _sendSupplementaryCandidates() async {
+    final port = _capturedIcePort;
+    final sdpMid = _capturedIceSdpMid ?? '0';
+    final sdpMLineIndex = _capturedIceSdpMLineIndex;
+    if (port == null || _session == null) return;
+
+    List<String> localIPList;
+    try {
+      localIPList = _piperNode.localIPs();
+    } catch (_) {
+      return;
+    }
+
+    for (final ip in localIPList) {
+      if (_advertisedIceIPs.contains(ip)) continue;
+      _advertisedIceIPs.add(ip);
+
+      // Build a minimal host candidate string at the captured port.
+      // If libwebrtc bound its ICE socket to 0.0.0.0, packets to this
+      // IP:port will be received by the WebRTC stack even though libwebrtc
+      // didn't generate a candidate for this interface.
+      final candidateStr =
+          'candidate:supp 1 udp 1686052607 $ip $port typ host';
+      if (_session != null) {
+        try {
+          await _sendSignal('call_ice', {
+            'candidate': candidateStr,
+            'sdpMid': sdpMid,
+            'sdpMLineIndex': sdpMLineIndex,
+          });
+          _log('supplementary ICE candidate sent: $ip:$port');
+        } catch (_) {}
+      }
+    }
+  }
+
+  // ── ICE restart ───────────────────────────────────────────────────────────
+
+  /// Re-creates the offer with iceRestart:true. The answerer receives it via
+  /// the normal call_offer handler (restart:true flag prevents re-ringing).
+  Future<void> _tryIceRestart() async {
+    final s = _session;
+    if (s == null || _pc == null) return;
+
+    // Reset supplementary candidate state so we re-inject on next gather.
+    _capturedIcePort = null;
+    _capturedIceSdpMid = null;
+    _capturedIceSdpMLineIndex = 0;
+    _advertisedIceIPs.clear();
+
+    try {
+      if (s.direction == CallDirection.outgoing) {
+        final offer = await _pc!.createOffer({'iceRestart': true});
+        await _pc!.setLocalDescription(offer);
+        await _sendSignal('call_offer', {
+          'sdp': offer.sdp,
+          'is_video': isVideoCall,
+          'restart': true,
+        });
+        _log('ICE restart offer sent');
+      }
+      // Incoming side: wait for the caller to notice failure and restart.
+    } catch (e) {
+      _log('ICE restart error: $e');
+      await endCall();
+    }
   }
 
   void _log(String msg) {

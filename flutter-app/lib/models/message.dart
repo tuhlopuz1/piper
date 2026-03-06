@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'chat.dart';
 
-enum MsgType { text, image, file, voice }
+enum MsgType { text, image, file, voice, call }
+
+enum CallResult { answered, missed, rejected }
 
 class Message {
   final String id;
@@ -26,6 +28,11 @@ class Message {
   // voice
   final int? voiceDuration; // seconds
 
+  // call
+  final int? callDuration; // seconds (0 for missed/rejected)
+  final bool? callIsVideo;
+  final CallResult? callResult; // answered, missed, rejected
+
   final DateTime time;
   final bool delivered;
 
@@ -43,6 +50,9 @@ class Message {
     this.fileSize,
     this.filePath,
     this.voiceDuration,
+    this.callDuration,
+    this.callIsVideo,
+    this.callResult,
     required this.time,
     this.delivered = true,
   });

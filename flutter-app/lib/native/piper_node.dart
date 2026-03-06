@@ -187,6 +187,36 @@ class PiperNode {
     malloc.free(gidPtr);
   }
 
+  // ─── Network helpers ───────────────────────────────────────────────────────
+
+  /// Returns all non-loopback IPv4 addresses on this device, including
+  /// AP/hotspot interfaces hidden from libwebrtc's network enumeration.
+  List<String> localIPs() {
+    final ptr = _bindings.localIPs(_handle);
+    final jsonStr = ptr.toDartString();
+    _bindings.freeString(ptr);
+    final list = jsonDecode(jsonStr) as List<dynamic>;
+    return list.map((e) => e as String).toList();
+  }
+
+  /// Returns the UDP port of the local TURN relay server, or 0 if unavailable.
+  /// Use with turn:<peerIP>:<port> in WebRTC ICE server config so calls work
+  /// on WiFi Direct networks where libwebrtc cannot enumerate the AP interface.
+  int getTURNPort() {
+    return _bindings.getTURNPort(_handle);
+  }
+
+  /// Returns the TCP remote IP for [peerID] as seen at the Go transport layer,
+  /// or empty string if unknown.
+  String getPeerIP(String peerID) {
+    final pidPtr = peerID.toNativeUtf8();
+    final ptr = _bindings.getPeerIP(_handle, pidPtr);
+    malloc.free(pidPtr);
+    final val = ptr.toDartString();
+    _bindings.freeString(ptr);
+    return val;
+  }
+
   // ─── Queries ───────────────────────────────────────────────────────────────
 
   /// Get a snapshot of all known peers.

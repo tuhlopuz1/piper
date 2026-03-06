@@ -67,6 +67,15 @@ typedef _SendCallSignalDart = Pointer<Utf8> Function(
     Pointer<Utf8> signalType,
     Pointer<Utf8> payload);
 
+typedef _LocalIPsC = Pointer<Utf8> Function(Int32 handle);
+typedef _LocalIPsDart = Pointer<Utf8> Function(int handle);
+
+typedef _GetPeerIPC = Pointer<Utf8> Function(Int32 handle, Pointer<Utf8> peerID);
+typedef _GetPeerIPDart = Pointer<Utf8> Function(int handle, Pointer<Utf8> peerID);
+
+typedef _GetTURNPortC = Int32 Function(Int32 handle);
+typedef _GetTURNPortDart = int Function(int handle);
+
 typedef _FreeStringC = Void Function(Pointer<Utf8> s);
 typedef _FreeStringDart = void Function(Pointer<Utf8> s);
 
@@ -91,6 +100,9 @@ class PiperBindings {
   late final _SetDownloadsDirDart setDownloadsDir;
   late final _SetNodeNameDart setNodeName;
   late final _SendCallSignalDart sendCallSignal;
+  late final _LocalIPsDart localIPs;
+  late final _GetPeerIPDart getPeerIP;
+  late final _GetTURNPortDart getTURNPort;
   late final _FreeStringDart freeString;
 
   PiperBindings({String? libraryPath}) {
@@ -132,6 +144,12 @@ class PiperBindings {
         .lookupFunction<_SetNodeNameC, _SetNodeNameDart>('PiperSetNodeName');
     sendCallSignal = _lib
         .lookupFunction<_SendCallSignalC, _SendCallSignalDart>('PiperSendCallSignal');
+    localIPs = _lib
+        .lookupFunction<_LocalIPsC, _LocalIPsDart>('PiperLocalIPs');
+    getPeerIP = _lib
+        .lookupFunction<_GetPeerIPC, _GetPeerIPDart>('PiperGetPeerIP');
+    getTURNPort = _lib
+        .lookupFunction<_GetTURNPortC, _GetTURNPortDart>('PiperGetTURNPort');
     freeString = _lib
         .lookupFunction<_FreeStringC, _FreeStringDart>('PiperFreeString');
   }

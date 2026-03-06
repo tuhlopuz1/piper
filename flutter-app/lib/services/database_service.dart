@@ -29,7 +29,7 @@ class DatabaseService {
 
       _db = await openDatabase(
         dbPath,
-        version: 2,
+        version: 3,
         onCreate: (db, _) async {
           await db.execute('''
             CREATE TABLE messages (
@@ -45,6 +45,9 @@ class DatabaseService {
               file_path      TEXT,
               file_size      INTEGER,
               voice_duration INTEGER,
+              call_duration  INTEGER,
+              call_is_video  INTEGER,
+              call_result    TEXT,
               time           INTEGER NOT NULL,
               delivered      INTEGER NOT NULL DEFAULT 0
             )
@@ -65,6 +68,11 @@ class DatabaseService {
             await db.execute(
               "ALTER TABLE chats ADD COLUMN name TEXT NOT NULL DEFAULT ''",
             );
+          }
+          if (oldVersion < 3) {
+            await db.execute('ALTER TABLE messages ADD COLUMN call_duration INTEGER');
+            await db.execute('ALTER TABLE messages ADD COLUMN call_is_video INTEGER');
+            await db.execute('ALTER TABLE messages ADD COLUMN call_result TEXT');
           }
         },
       );
@@ -99,6 +107,9 @@ class DatabaseService {
         'file_path': msg.filePath,
         'file_size': msg.fileSize,
         'voice_duration': msg.voiceDuration,
+        'call_duration': msg.callDuration,
+        'call_is_video': msg.callIsVideo == null ? null : (msg.callIsVideo! ? 1 : 0),
+        'call_result': msg.callResult?.name,
         'time': msg.time.millisecondsSinceEpoch,
         'delivered': msg.delivered ? 1 : 0,
       },
@@ -143,6 +154,14 @@ class DatabaseService {
       filePath: row['file_path'] as String?,
       fileSize: row['file_size'] as int?,
       voiceDuration: row['voice_duration'] as int?,
+      callDuration: row['call_duration'] as int?,
+      callIsVideo: row['call_is_video'] != null ? (row['call_is_video'] as int) == 1 : null,
+      callResult: row['call_result'] != null
+          ? CallResult.values.firstWhere(
+              (r) => r.name == row['call_result'],
+              orElse: () => CallResult.answered,
+            )
+          : null,
       time: DateTime.fromMillisecondsSinceEpoch(row['time'] as int),
       delivered: (row['delivered'] as int) == 1,
     );

@@ -15,8 +15,12 @@ class PiperEvent {
   final String? groupName;
   final int? timestamp;
 
+  // TCP-layer peer address (set on call events; used for WiFi Direct ICE)
+  final String? peerAddr;
+
   // Peer event fields
   final String? peerState; // "joined", "left"
+
 
   // Group event fields
   final String? groupEvent; // "created", "member_joined", "member_left", "deleted"
@@ -37,6 +41,7 @@ class PiperEvent {
     this.msgType,
     this.peerId,
     this.peerName,
+    this.peerAddr,
     this.content,
     this.to,
     this.groupId,
@@ -61,6 +66,7 @@ class PiperEvent {
       msgType: json['msg_type'] as String?,
       peerId: json['peer_id'] as String?,
       peerName: json['peer_name'] as String?,
+      peerAddr: json['peer_addr'] as String?,
       content: json['content'] as String?,
       to: json['to'] as String?,
       groupId: json['group_id'] as String?,

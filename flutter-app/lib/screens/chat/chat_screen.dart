@@ -473,6 +473,8 @@ class _BubbleContent extends StatelessWidget {
         content = _FileContent(message: message, bg: bg, fg: fg, radius: radius, transferProgress: progress);
       case MsgType.voice:
         content = _VoiceContent(message: message, bg: bg, fg: fg, radius: radius);
+      case MsgType.call:
+        content = _CallContent(message: message, bg: bg, fg: fg, radius: radius);
     }
 
     return content;
@@ -735,6 +737,91 @@ class _VoiceContentState extends State<_VoiceContent> {
                     _TimeRow(message: widget.message, fg: widget.fg.withValues(alpha: 0.6)),
                   ],
                 ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CallContent extends StatelessWidget {
+  final Message message;
+  final Color bg, fg;
+  final BorderRadius radius;
+  const _CallContent({required this.message, required this.bg, required this.fg, required this.radius});
+
+  IconData _icon() {
+    if (message.callResult == CallResult.missed) return Icons.call_missed_rounded;
+    if (message.callResult == CallResult.rejected) return Icons.call_end_rounded;
+    if (message.isMe) return Icons.call_made_rounded;
+    return Icons.call_received_rounded;
+  }
+
+  String _label() {
+    final type = (message.callIsVideo ?? false) ? 'Видеозвонок' : 'Голосовой звонок';
+    if (message.callResult == CallResult.missed) return '$type · Пропущенный';
+    if (message.callResult == CallResult.rejected) return '$type · Отклонён';
+    final dur = message.callDuration ?? 0;
+    if (dur < 60) return '$type · ${dur}с';
+    final m = dur ~/ 60;
+    final s = dur % 60;
+    if (m < 60) return '$type · ${m}м ${s}с';
+    final h = m ~/ 60;
+    return '$type · ${h}ч ${m % 60}м';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isMissed = message.callResult == CallResult.missed ||
+        message.callResult == CallResult.rejected;
+    final iconColor = isMissed ? AppColors.destructive : fg;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(color: bg, borderRadius: radius),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              (message.callIsVideo ?? false) ? Icons.videocam_rounded : Icons.phone_rounded,
+              color: iconColor,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(_icon(), size: 14, color: iconColor),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        _label(),
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: isMissed ? AppColors.destructive : fg,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                _TimeRow(message: message, fg: fg.withValues(alpha: 0.6)),
               ],
             ),
           ),

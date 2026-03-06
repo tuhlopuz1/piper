@@ -49,6 +49,7 @@ type Node struct {
 	peers     *PeerManager
 	groups    *GroupManager
 	transfers *TransferManager
+	turn      *TURNServer // local TURN relay for WiFi Direct scenarios
 
 	// downloadsDir is where received files are saved. Defaults to FileDownloadDir.
 	downloadsDir string
@@ -123,6 +124,52 @@ func NewNodeWithID(name, id string) *Node {
 
 // SetName updates the display name used in outgoing messages and discovery.
 func (n *Node) SetName(name string) { n.name = name }
+
+// LocalIPv4s returns all non-loopback, non-link-local IPv4 addresses currently
+// assigned to this machine across ALL interfaces — including WiFi AP/hotspot
+// interfaces that Android's ConnectivityManager hides from libwebrtc.
+func (n *Node) LocalIPv4s() []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip4 := ipnet.IP.To4()
+			if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
+				continue
+			}
+			out = append(out, ip4.String())
+		}
+	}
+	return out
+}
+
+// PeerIP returns the TCP remote IP of the named peer as seen at the Go
+// transport layer, or "" if unknown. This includes AP-interface IPs that
+// libwebrtc's network monitor does not enumerate.
+func (n *Node) PeerIP(peerID string) string {
+	peer := n.peers.Get(peerID)
+	if peer == nil || peer.Addr == nil {
+		return ""
+	}
+	if tcp, ok := peer.Addr.(*net.TCPAddr); ok {
+		return tcp.IP.String()
+	}
+	return peer.Addr.String()
+}
 
 // ID returns the stable peer ID for this node.
 func (n *Node) ID() string { return n.id }
@@ -542,6 +589,16 @@ func (n *Node) Start() error {
 	if err := n.discovery.Start(n.ctx); err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
+
+	// Start local TURN relay so WebRTC can relay media even when libwebrtc
+	// cannot enumerate the WiFi hotspot AP interface (Android hotspot mode).
+	if turn, err := NewTURNServer(); err == nil {
+		n.turn = turn
+		log.Printf("[node] TURN relay started on :%d", turn.Port())
+	} else {
+		log.Printf("[node] TURN relay start failed (calls may not work on WiFi Direct): %v", err)
+	}
+
 	return nil
 }
 
@@ -571,9 +628,23 @@ func (n *Node) pingLoop() {
 	}
 }
 
+// TURNPort returns the UDP port of the local TURN relay server, or 0 if it
+// was not started. WebRTC clients use this port for relay candidates via
+// turn:<peerIP>:<TURNPort>.
+func (n *Node) TURNPort() int {
+	if n.turn == nil {
+		return 0
+	}
+	return n.turn.Port()
+}
+
 // Stop shuts down the node cleanly.
 func (n *Node) Stop() {
 	n.cancel()
+	if n.turn != nil {
+		n.turn.Stop()
+		n.turn = nil
+	}
 	if n.discovery != nil {
 		n.discovery.Stop()
 	}

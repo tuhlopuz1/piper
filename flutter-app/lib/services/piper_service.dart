@@ -48,6 +48,10 @@ class PiperService extends ChangeNotifier {
   // dedup: incoming transfer IDs already shown as a bubble
   final Set<String> _processedIncomingTransfers = {};
 
+  // ── Call history ──────────────────────────────────────────────────────────
+  final List<CallRecord> _callHistory = [];
+  List<CallRecord> get callHistory => List.unmodifiable(_callHistory);
+
   // ── Unread counts (persisted) ──────────────────────────────────────────────
   final Map<String, int> _unreadCounts = {};
 
@@ -94,6 +98,7 @@ class PiperService extends ChangeNotifier {
       _node!.start();
       _sub = _node!.events.listen(_onEvent);
       CallService.instance.init(_node!);
+      CallService.instance.onCallEnded = _onCallEnded;
       await CallService.instance.loadDevicePreferences();
 
       // Load persisted messages, unread counts, and chat names.
@@ -104,6 +109,24 @@ class PiperService extends ChangeNotifier {
       _unreadCounts.addAll(storedUnreads);
       final storedNames = await DatabaseService.instance.getChatNames();
       _chatNames.addAll(storedNames);
+
+      // Rebuild call history from persisted call messages.
+      for (final entry in _messages.entries) {
+        for (final msg in entry.value) {
+          if (msg.type == MsgType.call) {
+            _callHistory.add(CallRecord(
+              peerId: entry.key,
+              peerName: msg.senderName ?? _chatNames[entry.key] ?? entry.key,
+              direction: msg.isMe ? CallDirection.outgoing : CallDirection.incoming,
+              isVideo: msg.callIsVideo ?? false,
+              durationSeconds: msg.callDuration ?? 0,
+              answered: msg.callResult == CallResult.answered,
+              time: msg.time,
+            ));
+          }
+        }
+      }
+      _callHistory.sort((a, b) => b.time.compareTo(a.time));
 
       _refresh();
     } catch (e) {
@@ -292,6 +315,47 @@ class PiperService extends ChangeNotifier {
       }
       notifyListeners();
     }
+  }
+
+  // ── Call history ────────────────────────────────────────────────────────────
+
+  void _onCallEnded(CallRecord record) {
+    _callHistory.insert(0, record);
+
+    // Also add a call message bubble to the DM chat.
+    final chatId = record.peerId;
+    final CallResult result;
+    if (record.answered) {
+      result = CallResult.answered;
+    } else if (record.direction == CallDirection.incoming) {
+      result = CallResult.missed;
+    } else {
+      result = CallResult.rejected;
+    }
+
+    final isMe = record.direction == CallDirection.outgoing;
+    final msg = Message(
+      id: 'call_${record.time.millisecondsSinceEpoch}',
+      isMe: isMe,
+      senderName: isMe ? null : record.peerName,
+      type: MsgType.call,
+      callDuration: record.durationSeconds,
+      callIsVideo: record.isVideo,
+      callResult: result,
+      time: record.time,
+    );
+
+    _messages.putIfAbsent(chatId, () => []);
+    _messages[chatId]!.add(msg);
+    DatabaseService.instance.insertMessage(chatId, msg);
+
+    // Persist peer name for offline display.
+    if (record.peerName.isNotEmpty) {
+      _chatNames[chatId] = record.peerName;
+      DatabaseService.instance.upsertChatName(chatId, record.peerName);
+    }
+
+    notifyListeners();
   }
 
   // ── Messaging ─────────────────────────────────────────────────────────────
