@@ -16,9 +16,9 @@ else
 IS_WINDOWS := 0
 endif
 
-.PHONY: all installer zip package android linux clean
-
-all: installer android
+all:
+	$(PS) scripts\build-windows.ps1 -Target all
+	$(PS) scripts\build-android.ps1
 
 installer:
 ifeq ($(IS_WINDOWS),1)
