@@ -63,6 +63,7 @@ Filename: "{app}\{#AppExe}"; Description: "Запустить {#AppName}"; Flags
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\piper-files"
 Type: filesandordirs; Name: "{app}\piper-downloads"
+Type: filesandordirs; Name: "{app}\.dart_tool"
 
 [Code]
 var
