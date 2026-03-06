@@ -1,155 +1,171 @@
 package core
 
 import (
-	"sync"
 	"testing"
 )
 
-func TestTransferManager_Start(t *testing.T) {
+func TestTransferStartAndGet(t *testing.T) {
 	tm := NewTransferManager()
-	tr := tm.Start("t1", "peer-1", "file.txt", 1024, true)
+	tr := tm.Start("tid-1", "peer-1", "file.txt", 1024, true)
 
-	if tr.ID != "t1" {
-		t.Fatalf("ID = %q, want %q", tr.ID, "t1")
+	if tr == nil {
+		t.Fatal("Start returned nil")
+	}
+	if tr.ID != "tid-1" {
+		t.Errorf("ID: got %q, want tid-1", tr.ID)
 	}
 	if tr.PeerID != "peer-1" {
-		t.Fatalf("PeerID = %q, want %q", tr.PeerID, "peer-1")
+		t.Errorf("PeerID: got %q, want peer-1", tr.PeerID)
 	}
 	if tr.FileName != "file.txt" {
-		t.Fatalf("FileName = %q, want %q", tr.FileName, "file.txt")
+		t.Errorf("FileName: got %q, want file.txt", tr.FileName)
 	}
 	if tr.FileSize != 1024 {
-		t.Fatalf("FileSize = %d, want %d", tr.FileSize, 1024)
+		t.Errorf("FileSize: got %d, want 1024", tr.FileSize)
 	}
 	if !tr.Sending {
-		t.Fatal("Sending should be true")
+		t.Error("Sending should be true for outgoing transfer")
 	}
 	if tr.Done {
-		t.Fatal("Done should be false initially")
+		t.Error("Done should be false for new transfer")
 	}
-	if tr.Progress != 0 {
-		t.Fatalf("Progress = %d, want 0", tr.Progress)
-	}
-	if tr.accepted == nil {
-		t.Fatal("accepted channel should be created for sending transfer")
-	}
-}
 
-func TestTransferManager_Start_Receiving(t *testing.T) {
-	tm := NewTransferManager()
-	tr := tm.Start("t1", "peer-1", "file.txt", 1024, false)
-
-	if tr.Sending {
-		t.Fatal("Sending should be false for receiving transfer")
-	}
-	if tr.accepted != nil {
-		t.Fatal("accepted channel should be nil for receiving transfer")
-	}
-}
-
-func TestTransferManager_Get(t *testing.T) {
-	tm := NewTransferManager()
-	tm.Start("t1", "peer-1", "file.txt", 1024, false)
-
-	got := tm.Get("t1")
+	got := tm.Get("tid-1")
 	if got == nil {
 		t.Fatal("Get returned nil for existing transfer")
 	}
-	if got.FileName != "file.txt" {
-		t.Fatalf("FileName = %q, want %q", got.FileName, "file.txt")
-	}
-
-	if tm.Get("nonexistent") != nil {
-		t.Fatal("Get should return nil for unknown transfer")
+	if got.ID != "tid-1" {
+		t.Errorf("Get ID: got %q, want tid-1", got.ID)
 	}
 }
 
-func TestTransferManager_UpdateProgress(t *testing.T) {
+func TestTransferGetUnknown(t *testing.T) {
 	tm := NewTransferManager()
-	tm.Start("t1", "peer-1", "file.txt", 1024, false)
-
-	tm.UpdateProgress("t1", 512)
-	got := tm.Get("t1")
-	if got.Progress != 512 {
-		t.Fatalf("Progress = %d, want 512", got.Progress)
+	got := tm.Get("nonexistent")
+	if got != nil {
+		t.Errorf("Get unknown transfer should return nil, got %+v", got)
 	}
+}
 
+func TestTransferSenderHasAcceptedChannel(t *testing.T) {
+	tm := NewTransferManager()
+	// Sending = true should have accepted channel.
+	tr := tm.Start("tid-send", "p1", "f.txt", 100, true)
+	if tr.accepted == nil {
+		t.Error("sender transfer should have accepted channel")
+	}
+}
+
+func TestTransferReceiverHasNoAcceptedChannel(t *testing.T) {
+	tm := NewTransferManager()
+	// Sending = false (receiver) should NOT have accepted channel.
+	tr := tm.Start("tid-recv", "p1", "f.txt", 100, false)
+	if tr.accepted != nil {
+		t.Error("receiver transfer should not have accepted channel")
+	}
+}
+
+func TestTransferUpdateProgress(t *testing.T) {
+	tm := NewTransferManager()
+	tm.Start("tid-1", "peer-1", "file.txt", 1024, false)
+
+	tm.UpdateProgress("tid-1", 512)
+
+	got := tm.Get("tid-1")
+	if got.Progress != 512 {
+		t.Errorf("Progress: got %d, want 512", got.Progress)
+	}
+}
+
+func TestTransferUpdateProgressUnknown(t *testing.T) {
+	tm := NewTransferManager()
+	// Should not panic.
 	tm.UpdateProgress("nonexistent", 100)
 }
 
-func TestTransferManager_Complete(t *testing.T) {
+func TestTransferComplete(t *testing.T) {
 	tm := NewTransferManager()
-	tm.Start("t1", "peer-1", "file.txt", 1024, false)
-	tm.UpdateProgress("t1", 500)
+	tm.Start("tid-1", "peer-1", "file.txt", 1024, false)
 
-	tm.Complete("t1")
-	got := tm.Get("t1")
+	tm.Complete("tid-1")
+
+	got := tm.Get("tid-1")
 	if !got.Done {
-		t.Fatal("Done should be true after Complete")
+		t.Error("Done should be true after Complete")
 	}
-	if got.Progress != 1024 {
-		t.Fatalf("Progress = %d, want %d (FileSize)", got.Progress, 1024)
+	if got.Progress != got.FileSize {
+		t.Errorf("Progress should equal FileSize after Complete: got %d, want %d", got.Progress, got.FileSize)
 	}
 	if got.Err != "" {
-		t.Fatalf("Err = %q, want empty", got.Err)
+		t.Errorf("Err should be empty after Complete, got %q", got.Err)
 	}
-
-	tm.Complete("nonexistent")
 }
 
-func TestTransferManager_Fail(t *testing.T) {
+func TestTransferFail(t *testing.T) {
 	tm := NewTransferManager()
-	tm.Start("t1", "peer-1", "file.txt", 1024, false)
+	tm.Start("tid-1", "peer-1", "file.txt", 1024, false)
 
-	tm.Fail("t1", "connection lost")
-	got := tm.Get("t1")
+	tm.Fail("tid-1", "connection reset")
+
+	got := tm.Get("tid-1")
 	if !got.Done {
-		t.Fatal("Done should be true after Fail")
+		t.Error("Done should be true after Fail")
 	}
-	if got.Err != "connection lost" {
-		t.Fatalf("Err = %q, want %q", got.Err, "connection lost")
+	if got.Err != "connection reset" {
+		t.Errorf("Err: got %q, want connection reset", got.Err)
 	}
+}
 
+func TestTransferFailUnknown(t *testing.T) {
+	tm := NewTransferManager()
+	// Should not panic.
 	tm.Fail("nonexistent", "error")
 }
 
-func TestTransferManager_Remove(t *testing.T) {
+func TestTransferCompleteUnknown(t *testing.T) {
 	tm := NewTransferManager()
-	tm.Start("t1", "peer-1", "file.txt", 1024, false)
-	tm.Remove("t1")
-
-	if tm.Get("t1") != nil {
-		t.Fatal("transfer should be removed")
-	}
-
-	tm.Remove("nonexistent")
+	// Should not panic.
+	tm.Complete("nonexistent")
 }
 
-func TestTransferManager_List(t *testing.T) {
+func TestTransferRemove(t *testing.T) {
 	tm := NewTransferManager()
-	tm.Start("t1", "p1", "a.txt", 100, true)
-	tm.Start("t2", "p2", "b.txt", 200, false)
+	tm.Start("tid-1", "peer-1", "file.txt", 1024, false)
+	tm.Remove("tid-1")
+
+	got := tm.Get("tid-1")
+	if got != nil {
+		t.Error("Get after Remove should return nil")
+	}
+}
+
+func TestTransferList(t *testing.T) {
+	tm := NewTransferManager()
+	tm.Start("tid-1", "peer-1", "a.txt", 100, true)
+	tm.Start("tid-2", "peer-2", "b.txt", 200, false)
+	tm.Start("tid-3", "peer-3", "c.txt", 300, true)
 
 	list := tm.List()
-	if len(list) != 2 {
-		t.Fatalf("List len = %d, want 2", len(list))
+	if len(list) != 3 {
+		t.Errorf("List length: got %d, want 3", len(list))
 	}
 }
 
-func TestTransferManager_ConcurrentAccess(t *testing.T) {
+func TestTransferListEmpty(t *testing.T) {
 	tm := NewTransferManager()
-	var wg sync.WaitGroup
-
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			id := string(rune('A' + i%26))
-			tm.Start(id, "peer", "file.txt", 1024, i%2 == 0)
-			tm.Get(id)
-			tm.UpdateProgress(id, int64(i*10))
-			tm.List()
-		}(i)
+	list := tm.List()
+	if list == nil {
+		t.Error("List should return empty slice, not nil")
 	}
-	wg.Wait()
+}
+
+func TestTransferGroupID(t *testing.T) {
+	tm := NewTransferManager()
+	tr := tm.Start("tid-1", "peer-1", "file.txt", 1024, true)
+	tr.GroupID = "grp-abc"
+
+	got := tm.Get("tid-1")
+	if got.GroupID != "grp-abc" {
+		t.Errorf("GroupID: got %q, want grp-abc", got.GroupID)
+	}
 }

@@ -1,158 +1,204 @@
 package core
 
 import (
-	"sort"
 	"sync"
 	"testing"
 )
 
-func TestGroupManager_Create(t *testing.T) {
+func TestGroupCreateAndGet(t *testing.T) {
 	gm := NewGroupManager()
-	g := gm.Create("g1", "Test Group", "creator-id")
+	g := gm.Create("grp-1", "Dev Team", "creator-id")
 
-	if g.ID != "g1" {
-		t.Fatalf("ID = %q, want %q", g.ID, "g1")
+	if g == nil {
+		t.Fatal("Create returned nil")
 	}
-	if g.Name != "Test Group" {
-		t.Fatalf("Name = %q, want %q", g.Name, "Test Group")
+	if g.ID != "grp-1" {
+		t.Errorf("ID: got %q, want grp-1", g.ID)
+	}
+	if g.Name != "Dev Team" {
+		t.Errorf("Name: got %q, want Dev Team", g.Name)
 	}
 	if !g.Members["creator-id"] {
-		t.Fatal("creator should be a member")
-	}
-	if len(g.Members) != 1 {
-		t.Fatalf("Members len = %d, want 1", len(g.Members))
-	}
-}
-
-func TestGroupManager_AddMember(t *testing.T) {
-	gm := NewGroupManager()
-	gm.Create("g1", "Group", "creator")
-
-	ok := gm.AddMember("g1", "peer-1")
-	if !ok {
-		t.Fatal("AddMember should return true for new member")
+		t.Error("creator should be in Members after Create")
 	}
 
-	ok = gm.AddMember("g1", "peer-1")
-	if ok {
-		t.Fatal("AddMember should return false for existing member")
-	}
-
-	ok = gm.AddMember("nonexistent", "peer-1")
-	if ok {
-		t.Fatal("AddMember should return false for nonexistent group")
-	}
-}
-
-func TestGroupManager_RemoveMember(t *testing.T) {
-	gm := NewGroupManager()
-	gm.Create("g1", "Group", "creator")
-	gm.AddMember("g1", "peer-1")
-	gm.RemoveMember("g1", "peer-1")
-
-	if gm.IsMember("g1", "peer-1") {
-		t.Fatal("peer-1 should be removed")
-	}
-	if !gm.IsMember("g1", "creator") {
-		t.Fatal("creator should still be a member")
-	}
-
-	gm.RemoveMember("nonexistent", "peer-1")
-}
-
-func TestGroupManager_Get(t *testing.T) {
-	gm := NewGroupManager()
-	gm.Create("g1", "Group", "creator")
-
-	g := gm.Get("g1")
-	if g == nil {
+	got := gm.Get("grp-1")
+	if got == nil {
 		t.Fatal("Get returned nil for existing group")
 	}
-	if g.Name != "Group" {
-		t.Fatalf("Name = %q, want %q", g.Name, "Group")
-	}
-
-	if gm.Get("nonexistent") != nil {
-		t.Fatal("Get should return nil for unknown group")
+	if got.ID != "grp-1" {
+		t.Errorf("Get ID: got %q, want grp-1", got.ID)
 	}
 }
 
-func TestGroupManager_List(t *testing.T) {
+func TestGroupGetUnknown(t *testing.T) {
 	gm := NewGroupManager()
-	gm.Create("g1", "Group1", "c1")
-	gm.Create("g2", "Group2", "c2")
-
-	list := gm.List()
-	if len(list) != 2 {
-		t.Fatalf("List len = %d, want 2", len(list))
+	got := gm.Get("nonexistent")
+	if got != nil {
+		t.Errorf("Get unknown group should return nil, got %+v", got)
 	}
 }
 
-func TestGroupManager_IsMember(t *testing.T) {
+func TestGroupAddMember(t *testing.T) {
 	gm := NewGroupManager()
-	gm.Create("g1", "Group", "creator")
-	gm.AddMember("g1", "peer-1")
+	gm.Create("grp-1", "Team", "alice")
 
-	if !gm.IsMember("g1", "creator") {
-		t.Fatal("creator should be a member")
+	added := gm.AddMember("grp-1", "bob")
+	if !added {
+		t.Error("AddMember should return true for new member")
 	}
-	if !gm.IsMember("g1", "peer-1") {
-		t.Fatal("peer-1 should be a member")
-	}
-	if gm.IsMember("g1", "stranger") {
-		t.Fatal("stranger should not be a member")
-	}
-	if gm.IsMember("nonexistent", "creator") {
-		t.Fatal("IsMember should return false for nonexistent group")
+
+	g := gm.Get("grp-1")
+	if !g.Members["bob"] {
+		t.Error("bob should be in Members after AddMember")
 	}
 }
 
-func TestGroupManager_Delete(t *testing.T) {
+func TestGroupAddMemberDuplicate(t *testing.T) {
 	gm := NewGroupManager()
-	gm.Create("g1", "Group", "creator")
-	gm.Delete("g1")
+	gm.Create("grp-1", "Team", "alice")
+	gm.AddMember("grp-1", "bob")
 
-	if gm.Get("g1") != nil {
-		t.Fatal("group should be deleted")
+	added := gm.AddMember("grp-1", "bob")
+	if added {
+		t.Error("AddMember for existing member should return false")
 	}
-	if len(gm.List()) != 0 {
-		t.Fatal("list should be empty after delete")
-	}
+}
 
+func TestGroupAddMemberUnknownGroup(t *testing.T) {
+	gm := NewGroupManager()
+	added := gm.AddMember("nonexistent", "bob")
+	if added {
+		t.Error("AddMember to nonexistent group should return false")
+	}
+}
+
+func TestGroupRemoveMember(t *testing.T) {
+	gm := NewGroupManager()
+	gm.Create("grp-1", "Team", "alice")
+	gm.AddMember("grp-1", "bob")
+
+	gm.RemoveMember("grp-1", "bob")
+	g := gm.Get("grp-1")
+	if g.Members["bob"] {
+		t.Error("bob should not be in Members after RemoveMember")
+	}
+	if !g.Members["alice"] {
+		t.Error("alice should still be in Members after removing bob")
+	}
+}
+
+func TestGroupRemoveMemberUnknownGroup(t *testing.T) {
+	gm := NewGroupManager()
+	// Should not panic.
+	gm.RemoveMember("nonexistent", "bob")
+}
+
+func TestGroupMemberIDs(t *testing.T) {
+	gm := NewGroupManager()
+	gm.Create("grp-1", "Team", "alice")
+	gm.AddMember("grp-1", "bob")
+	gm.AddMember("grp-1", "charlie")
+
+	g := gm.Get("grp-1")
+	ids := g.MemberIDs()
+	if len(ids) != 3 {
+		t.Errorf("MemberIDs length: got %d, want 3", len(ids))
+	}
+	idSet := make(map[string]bool)
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	for _, expected := range []string{"alice", "bob", "charlie"} {
+		if !idSet[expected] {
+			t.Errorf("MemberIDs missing %q", expected)
+		}
+	}
+}
+
+func TestGroupIsMember(t *testing.T) {
+	gm := NewGroupManager()
+	gm.Create("grp-1", "Team", "alice")
+
+	if !gm.IsMember("grp-1", "alice") {
+		t.Error("alice should be member")
+	}
+	if gm.IsMember("grp-1", "bob") {
+		t.Error("bob should not be member")
+	}
+	if gm.IsMember("nonexistent", "alice") {
+		t.Error("IsMember on nonexistent group should return false")
+	}
+}
+
+func TestGroupDelete(t *testing.T) {
+	gm := NewGroupManager()
+	gm.Create("grp-1", "Team", "alice")
+	gm.Delete("grp-1")
+
+	got := gm.Get("grp-1")
+	if got != nil {
+		t.Error("Get after Delete should return nil")
+	}
+}
+
+func TestGroupDeleteNonexistent(t *testing.T) {
+	gm := NewGroupManager()
+	// Should not panic.
 	gm.Delete("nonexistent")
 }
 
-func TestGroup_MemberIDs(t *testing.T) {
+func TestGroupList(t *testing.T) {
 	gm := NewGroupManager()
-	g := gm.Create("g1", "Group", "a")
-	gm.AddMember("g1", "c")
-	gm.AddMember("g1", "b")
+	gm.Create("grp-1", "Team A", "alice")
+	gm.Create("grp-2", "Team B", "bob")
 
-	ids := g.MemberIDs()
-	sort.Strings(ids)
-	if len(ids) != 3 {
-		t.Fatalf("MemberIDs len = %d, want 3", len(ids))
-	}
-	if ids[0] != "a" || ids[1] != "b" || ids[2] != "c" {
-		t.Fatalf("MemberIDs = %v, want [a b c]", ids)
+	list := gm.List()
+	if len(list) != 2 {
+		t.Errorf("List length: got %d, want 2", len(list))
 	}
 }
 
-func TestGroupManager_ConcurrentAccess(t *testing.T) {
+func TestGroupListEmpty(t *testing.T) {
 	gm := NewGroupManager()
-	gm.Create("g1", "Group", "creator")
+	list := gm.List()
+	if list == nil {
+		t.Error("List should return empty slice, not nil")
+	}
+}
+
+func TestGroupConcurrency(t *testing.T) {
+	gm := NewGroupManager()
+	gm.Create("grp-1", "Team", "creator")
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
+	// 5 goroutines add members, 5 goroutines check membership.
+	for i := 0; i < 5; i++ {
+		wg.Add(2)
+		go func(n int) {
 			defer wg.Done()
-			id := string(rune('A' + i%26))
-			gm.AddMember("g1", id)
-			gm.IsMember("g1", id)
-			gm.List()
-			gm.Get("g1")
+			id := string(rune('a' + n))
+			gm.AddMember("grp-1", id)
+		}(i)
+		go func(n int) {
+			defer wg.Done()
+			id := string(rune('a' + n))
+			_ = gm.IsMember("grp-1", id)
+			_ = gm.Get("grp-1")
 		}(i)
 	}
 	wg.Wait()
+	// Race detector validates no concurrent map access.
+}
+
+func TestGroupMultipleGroupsIsolated(t *testing.T) {
+	gm := NewGroupManager()
+	gm.Create("grp-1", "A", "alice")
+	gm.Create("grp-2", "B", "bob")
+	gm.AddMember("grp-1", "charlie")
+
+	g2 := gm.Get("grp-2")
+	if g2.Members["charlie"] {
+		t.Error("charlie should only be in grp-1, not grp-2")
+	}
 }

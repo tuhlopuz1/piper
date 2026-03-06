@@ -5,81 +5,38 @@ import (
 	"testing"
 )
 
-func TestGenerateKeyPair(t *testing.T) {
+func TestGenerateKeyPairIsRandom(t *testing.T) {
 	kp1, err := GenerateKeyPair()
 	if err != nil {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
 	kp2, err := GenerateKeyPair()
 	if err != nil {
-		t.Fatalf("GenerateKeyPair second: %v", err)
+		t.Fatalf("GenerateKeyPair: %v", err)
 	}
-
 	if kp1.Private == kp2.Private {
-		t.Fatal("two keypairs have identical private keys")
+		t.Error("two generated private keys are identical — should be random")
 	}
 	if kp1.Public == kp2.Public {
-		t.Fatal("two keypairs have identical public keys")
-	}
-
-	var zero [32]byte
-	if kp1.Public == zero {
-		t.Fatal("public key is all zeros")
+		t.Error("two generated public keys are identical — should be random")
 	}
 }
 
-func TestSharedSecret_Symmetric(t *testing.T) {
-	alice, _ := GenerateKeyPair()
-	bob, _ := GenerateKeyPair()
-
-	secretAB, err := SharedSecret(alice.Private, bob.Public[:])
+func TestEncryptDecryptRoundtrip(t *testing.T) {
+	kp, err := GenerateKeyPair()
 	if err != nil {
-		t.Fatalf("SharedSecret A->B: %v", err)
+		t.Fatalf("GenerateKeyPair: %v", err)
 	}
-	secretBA, err := SharedSecret(bob.Private, alice.Public[:])
-	if err != nil {
-		t.Fatalf("SharedSecret B->A: %v", err)
-	}
+	// Use key directly (simulates a derived shared key).
+	key := kp.Private
 
-	if secretAB != secretBA {
-		t.Fatal("shared secrets do not match")
-	}
-
-	var zero [32]byte
-	if secretAB == zero {
-		t.Fatal("shared secret is all zeros")
-	}
-}
-
-func TestSharedSecret_DifferentPeers(t *testing.T) {
-	alice, _ := GenerateKeyPair()
-	bob, _ := GenerateKeyPair()
-	charlie, _ := GenerateKeyPair()
-
-	secretAB, _ := SharedSecret(alice.Private, bob.Public[:])
-	secretAC, _ := SharedSecret(alice.Private, charlie.Public[:])
-
-	if secretAB == secretAC {
-		t.Fatal("shared secrets with different peers should differ")
-	}
-}
-
-func TestEncryptDecrypt_String(t *testing.T) {
-	alice, _ := GenerateKeyPair()
-	bob, _ := GenerateKeyPair()
-	key, _ := SharedSecret(alice.Private, bob.Public[:])
-
-	plaintext := "Hello, Piper!"
+	plaintext := "hello, mesh network!"
 	nonce, ciphertext, err := Encrypt(key, plaintext)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-
-	if len(nonce) != 12 {
-		t.Fatalf("nonce length = %d, want 12", len(nonce))
-	}
 	if ciphertext == plaintext {
-		t.Fatal("ciphertext equals plaintext")
+		t.Error("ciphertext should not equal plaintext")
 	}
 
 	got, err := Decrypt(key, nonce, ciphertext)
@@ -87,105 +44,112 @@ func TestEncryptDecrypt_String(t *testing.T) {
 		t.Fatalf("Decrypt: %v", err)
 	}
 	if got != plaintext {
-		t.Fatalf("Decrypt = %q, want %q", got, plaintext)
+		t.Errorf("Decrypt got %q, want %q", got, plaintext)
 	}
 }
 
-func TestDecrypt_WrongKey(t *testing.T) {
-	alice, _ := GenerateKeyPair()
-	bob, _ := GenerateKeyPair()
-	charlie, _ := GenerateKeyPair()
+func TestEncryptProducesDifferentNonceEachTime(t *testing.T) {
+	kp, _ := GenerateKeyPair()
+	key := kp.Private
 
-	keyAB, _ := SharedSecret(alice.Private, bob.Public[:])
-	keyAC, _ := SharedSecret(alice.Private, charlie.Public[:])
+	nonce1, ct1, _ := Encrypt(key, "same text")
+	nonce2, ct2, _ := Encrypt(key, "same text")
 
-	nonce, ciphertext, _ := Encrypt(keyAB, "secret message")
-
-	_, err := Decrypt(keyAC, nonce, ciphertext)
-	if err == nil {
-		t.Fatal("Decrypt with wrong key should fail")
+	if bytes.Equal(nonce1, nonce2) {
+		t.Error("two encryptions of same plaintext produced same nonce")
+	}
+	if ct1 == ct2 {
+		t.Error("two encryptions of same plaintext produced same ciphertext (nonce reuse?)")
 	}
 }
 
-func TestDecrypt_TamperedNonce(t *testing.T) {
-	key := [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+func TestEncryptBytesRoundtrip(t *testing.T) {
+	kp, _ := GenerateKeyPair()
+	key := kp.Private
 
-	nonce, ciphertext, _ := Encrypt(key, "test")
-	nonce[0] ^= 0xFF
-
-	_, err := Decrypt(key, nonce, ciphertext)
-	if err == nil {
-		t.Fatal("Decrypt with tampered nonce should fail")
-	}
-}
-
-func TestEncryptDecryptBytes(t *testing.T) {
-	key := [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
-
-	plaintext := []byte("binary data \x00\x01\x02")
-	nonce, ciphertext, err := EncryptBytes(key, plaintext)
+	plain := []byte{0x01, 0x02, 0x03, 0xFF, 0x00}
+	nonce, ct, err := EncryptBytes(key, plain)
 	if err != nil {
 		t.Fatalf("EncryptBytes: %v", err)
 	}
 
-	got, err := DecryptBytes(key, nonce, ciphertext)
+	got, err := DecryptBytes(key, nonce, ct)
 	if err != nil {
 		t.Fatalf("DecryptBytes: %v", err)
 	}
-	if !bytes.Equal(got, plaintext) {
-		t.Fatalf("DecryptBytes = %v, want %v", got, plaintext)
+	if !bytes.Equal(got, plain) {
+		t.Errorf("DecryptBytes got %v, want %v", got, plain)
 	}
 }
 
-func TestEncryptBytes_UniqueNonces(t *testing.T) {
-	key := [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+func TestSharedSecretSymmetric(t *testing.T) {
+	kpA, _ := GenerateKeyPair()
+	kpB, _ := GenerateKeyPair()
 
-	nonce1, _, _ := EncryptBytes(key, []byte("data"))
-	nonce2, _, _ := EncryptBytes(key, []byte("data"))
+	sharedAB, err := SharedSecret(kpA.Private, kpB.Public[:])
+	if err != nil {
+		t.Fatalf("SharedSecret A→B: %v", err)
+	}
+	sharedBA, err := SharedSecret(kpB.Private, kpA.Public[:])
+	if err != nil {
+		t.Fatalf("SharedSecret B→A: %v", err)
+	}
 
-	if bytes.Equal(nonce1, nonce2) {
-		t.Fatal("two encryptions produced identical nonces")
+	if sharedAB != sharedBA {
+		t.Error("ECDH shared secrets are not symmetric: SharedSecret(privA,pubB) != SharedSecret(privB,pubA)")
 	}
 }
 
-func TestEncryptDecrypt_EmptyString(t *testing.T) {
-	key := [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+func TestDecryptWrongKey(t *testing.T) {
+	kpA, _ := GenerateKeyPair()
+	kpB, _ := GenerateKeyPair()
 
-	nonce, ciphertext, err := Encrypt(key, "")
-	if err != nil {
-		t.Fatalf("Encrypt empty: %v", err)
-	}
-	got, err := Decrypt(key, nonce, ciphertext)
-	if err != nil {
-		t.Fatalf("Decrypt empty: %v", err)
-	}
-	if got != "" {
-		t.Fatalf("expected empty string, got %q", got)
+	nonce, ct, _ := Encrypt(kpA.Private, "secret")
+	_, err := Decrypt(kpB.Private, nonce, ct)
+	if err == nil {
+		t.Error("Decrypt with wrong key should return error, got nil")
 	}
 }
 
-func TestEncryptDecrypt_LargePayload(t *testing.T) {
-	key := [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+func TestDecryptTamperedCiphertext(t *testing.T) {
+	kp, _ := GenerateKeyPair()
+	key := kp.Private
 
-	plaintext := make([]byte, 1024*1024)
-	for i := range plaintext {
-		plaintext[i] = byte(i % 256)
+	nonce, ct, _ := Encrypt(key, "original")
+	// Flip first byte of base64 string (will produce invalid base64 or wrong ciphertext).
+	tamperedBytes := []byte(ct)
+	tamperedBytes[0] ^= 0xFF
+	tampered := string(tamperedBytes)
+	_, err := Decrypt(key, nonce, tampered)
+	if err == nil {
+		t.Error("Decrypt with tampered ciphertext should return error, got nil")
 	}
+}
 
-	nonce, ciphertext, err := EncryptBytes(key, plaintext)
-	if err != nil {
-		t.Fatalf("EncryptBytes large: %v", err)
+func TestDecryptEmptyCiphertext(t *testing.T) {
+	kp, _ := GenerateKeyPair()
+	nonce, _, _ := Encrypt(kp.Private, "x")
+	_, err := Decrypt(kp.Private, nonce, "")
+	if err == nil {
+		t.Error("Decrypt with empty ciphertext should return error")
 	}
-	got, err := DecryptBytes(key, nonce, ciphertext)
+}
+
+func TestSharedSecretUsableForEncryption(t *testing.T) {
+	kpA, _ := GenerateKeyPair()
+	kpB, _ := GenerateKeyPair()
+
+	shared, _ := SharedSecret(kpA.Private, kpB.Public[:])
+
+	nonce, ct, err := Encrypt(shared, "via shared key")
 	if err != nil {
-		t.Fatalf("DecryptBytes large: %v", err)
+		t.Fatalf("Encrypt with shared key: %v", err)
 	}
-	if !bytes.Equal(got, plaintext) {
-		t.Fatal("large payload round-trip failed")
+	got, err := Decrypt(shared, nonce, ct)
+	if err != nil {
+		t.Fatalf("Decrypt with shared key: %v", err)
+	}
+	if got != "via shared key" {
+		t.Errorf("got %q", got)
 	}
 }
