@@ -20,7 +20,9 @@ class PiperEvent {
 
   // Peer event fields
   final String? peerState; // "joined", "left"
-
+  final bool? isRelay;
+  final String? relayPeerName;
+  final String? hopPath;
 
   // Group event fields
   final String? groupEvent; // "created", "member_joined", "member_left", "deleted"
@@ -48,6 +50,9 @@ class PiperEvent {
     this.groupName,
     this.timestamp,
     this.peerState,
+    this.isRelay,
+    this.relayPeerName,
+    this.hopPath,
     this.groupEvent,
     this.members,
     this.transferId,
@@ -73,6 +78,9 @@ class PiperEvent {
       groupName: json['group_name'] as String?,
       timestamp: json['ts'] as int?,
       peerState: json['peer_state'] as String?,
+      isRelay: json['is_relay'] as bool?,
+      relayPeerName: json['relay_peer_name'] as String?,
+      hopPath: json['hop_path'] as String?,
       groupEvent: json['group_event'] as String?,
       members: (json['members'] as List<dynamic>?)
           ?.map((e) => e as String)
@@ -99,12 +107,18 @@ class PeerInfo {
   final String name;
   final String displayName;
   final String state; // "connecting", "connected", "disconnected"
+  final bool isRelay;
+  final String? relayPeerID;
+  final String? relayPeerName;
 
   const PeerInfo({
     required this.id,
     required this.name,
     required this.displayName,
     required this.state,
+    this.isRelay = false,
+    this.relayPeerID,
+    this.relayPeerName,
   });
 
   factory PeerInfo.fromJson(Map<String, dynamic> json) {
@@ -113,6 +127,9 @@ class PeerInfo {
       name: json['name'] as String,
       displayName: json['display_name'] as String,
       state: json['state'] as String,
+      isRelay: json['is_relay'] as bool? ?? false,
+      relayPeerID: json['relay_peer_id'] as String?,
+      relayPeerName: json['relay_peer_name'] as String?,
     );
   }
 

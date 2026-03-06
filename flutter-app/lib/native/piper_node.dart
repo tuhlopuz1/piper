@@ -241,6 +241,25 @@ class PiperNode {
         .toList();
   }
 
+  // ─── Mesh topology ─────────────────────────────────────────────────────────
+
+  /// Returns the current mesh topology as JSON with nodes and edges.
+  Map<String, dynamic> getTopology() {
+    final ptr = _bindings.getTopology(_handle);
+    final jsonStr = ptr.toDartString();
+    _bindings.freeString(ptr);
+    return jsonDecode(jsonStr) as Map<String, dynamic>;
+  }
+
+  /// Returns the routing table as {targetPeerID: nextHopPeerID}.
+  Map<String, String> getRouteTable() {
+    final ptr = _bindings.getRouteTable(_handle);
+    final jsonStr = ptr.toDartString();
+    _bindings.freeString(ptr);
+    final raw = jsonDecode(jsonStr) as Map<String, dynamic>;
+    return raw.map((k, v) => MapEntry(k, v as String));
+  }
+
   // ─── Internal ──────────────────────────────────────────────────────────────
 
   void _setupEventCallback() {

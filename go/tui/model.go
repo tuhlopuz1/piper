@@ -218,6 +218,61 @@ func (m Model) updateNormal(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
 		if m.focus == focusChat {
 			text := strings.TrimSpace(m.input.Value())
 			if text != "" {
+				// Handle slash commands.
+				if text == "/route" {
+					m.input.Reset()
+					rt := m.node.RouteTable()
+					var lines []string
+					lines = append(lines, systemMsgStyle.Render("  Routing table:"))
+					if len(rt) == 0 {
+						lines = append(lines, systemMsgStyle.Render("    (empty)"))
+					}
+					for target, nextHop := range rt {
+						targetName := target[:8]
+						if p := m.node.PeerByID(target); p != nil {
+							targetName = p.DisplayName
+						}
+						hopName := nextHop[:8]
+						if p := m.node.PeerByID(nextHop); p != nil {
+							hopName = p.DisplayName
+						}
+						if target == nextHop {
+							lines = append(lines, systemMsgStyle.Render(fmt.Sprintf("    %s → direct", targetName)))
+						} else {
+							lines = append(lines, systemMsgStyle.Render(fmt.Sprintf("    %s → via %s", targetName, hopName)))
+						}
+					}
+					for _, l := range lines {
+						m = m.addNoticeToChat(m.activeChatID, l)
+					}
+					return m, cmds
+				}
+				if text == "/topology" {
+					m.input.Reset()
+					edges := m.node.Topology()
+					var lines []string
+					lines = append(lines, systemMsgStyle.Render("  Network topology:"))
+					if len(edges) == 0 {
+						lines = append(lines, systemMsgStyle.Render("    (no connections)"))
+					}
+					for _, e := range edges {
+						aName := e[0][:8]
+						if e[0] == m.node.ID() {
+							aName = "YOU"
+						} else if p := m.node.PeerByID(e[0]); p != nil {
+							aName = p.DisplayName
+						}
+						bName := e[1][:8]
+						if p := m.node.PeerByID(e[1]); p != nil {
+							bName = p.DisplayName
+						}
+						lines = append(lines, systemMsgStyle.Render(fmt.Sprintf("    %s ─── %s", aName, bName)))
+					}
+					for _, l := range lines {
+						m = m.addNoticeToChat(m.activeChatID, l)
+					}
+					return m, cmds
+				}
 				m.sendForActiveChat(text)
 				m.input.Reset()
 			}
@@ -689,10 +744,18 @@ func (m Model) buildPanelItems() []panelItem {
 		if cs := m.chats[p.ID]; cs != nil {
 			unread = cs.unread
 		}
+		name := p.DisplayName
+		if p.IsRelay {
+			relayName := p.RelayPeerID[:8]
+			if rp := m.node.PeerByID(p.RelayPeerID); rp != nil {
+				relayName = rp.DisplayName
+			}
+			name += " (via " + relayName + ")"
+		}
 		items = append(items, panelItem{
 			kind:   itemPeer,
 			id:     p.ID,
-			name:   p.DisplayName,
+			name:   name,
 			state:  p.State,
 			unread: unread,
 		})
@@ -762,7 +825,11 @@ func (m Model) appendMessage(msg core.Message) Model {
 		} else {
 			nameS = senderStyle.Render(msg.Name)
 		}
-		line = fmt.Sprintf("%s %s: %s", ts, nameS, theirMsgStyle.Render(msg.Content))
+		relayTag := ""
+		if len(msg.HopPath) > 0 {
+			relayTag = systemMsgStyle.Render(fmt.Sprintf(" [relay via %d hop(s)]", len(msg.HopPath)))
+		}
+		line = fmt.Sprintf("%s %s:%s %s", ts, nameS, relayTag, theirMsgStyle.Render(msg.Content))
 	default:
 		return m
 	}

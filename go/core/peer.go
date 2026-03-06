@@ -26,6 +26,8 @@ type PeerInfo struct {
 	LastSeen    time.Time
 	PubKey      []byte   // X25519 public key received in Hello (32 bytes)
 	SharedKey   [32]byte // ChaCha20-Poly1305 key derived via ECDH; zero until handshake complete
+	IsRelay     bool     // true if peer is reachable only via relay, not directly
+	RelayPeerID string   // peerID of the relay node (if IsRelay)
 }
 
 // PeerEvent is emitted to the application layer when peers join/leave.
@@ -120,6 +122,16 @@ func (pm *PeerManager) SetPubKey(id string, pub []byte) {
 	defer pm.mu.Unlock()
 	if p, ok := pm.peers[id]; ok {
 		p.PubKey = pub
+	}
+}
+
+// SetRelay marks a peer as relay-reachable (or not).
+func (pm *PeerManager) SetRelay(id string, isRelay bool, relayPeerID string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if p, ok := pm.peers[id]; ok {
+		p.IsRelay = isRelay
+		p.RelayPeerID = relayPeerID
 	}
 }
 

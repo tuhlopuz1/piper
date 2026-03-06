@@ -60,6 +60,11 @@ type Node struct {
 	discovered   map[string]peerEndpoint
 	connGen      map[string]uint64
 
+	// Mesh routing state
+	seenMsgIDs sync.Map            // msgID -> time.Time (deduplication)
+	routeTable map[string]string   // targetPeerID -> nextHopPeerID
+	routeMu    sync.RWMutex
+
 	eventCh chan Event
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -116,6 +121,7 @@ func NewNodeWithID(name, id string) *Node {
 		connByPeerID: make(map[string]*conn),
 		discovered:   make(map[string]peerEndpoint),
 		connGen:      make(map[string]uint64),
+		routeTable:   make(map[string]string),
 		eventCh:      make(chan Event, 512),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -302,6 +308,8 @@ func (n *Node) SendGroup(text, groupID string) {
 			To:        memberID,
 			GroupID:   groupID,
 			Nonce:     nonce,
+			TTL:       DefaultTTL,
+			Origin:    n.id,
 			Timestamp: echo.Timestamp,
 		}
 		n.mu.Lock()
@@ -309,6 +317,8 @@ func (n *Node) SendGroup(text, groupID string) {
 		n.mu.Unlock()
 		if cn != nil {
 			cn.send(wireMsg)
+		} else {
+			n.sendViaRelay(wireMsg, memberID)
 		}
 	}
 }
@@ -584,6 +594,7 @@ func (n *Node) Start() error {
 
 	go n.acceptLoop()
 	go n.pingLoop()
+	go n.cleanSeenCache()
 
 	n.discovery = NewDiscovery(n.id, n.name, n.port, n.onDiscovered)
 	if err := n.discovery.Start(n.ctx); err != nil {
@@ -703,6 +714,8 @@ func (n *Node) SendCallSignal(toPeerID, signalType, payload string) error {
 		Content:   ciphertext,
 		Nonce:     nonce,
 		To:        toPeerID,
+		TTL:       DefaultTTL,
+		Origin:    n.id,
 		Timestamp: time.Now(),
 	}
 
@@ -769,17 +782,20 @@ func (n *Node) sendDirect(text, toPeerID string) {
 	}
 	n.emit(Event{Msg: &echo})
 
-	// Send encrypted wire message.
+	// Send encrypted wire message — try direct, then relay.
 	n.mu.Lock()
 	cn := n.connByPeerID[toPeerID]
 	n.mu.Unlock()
-	if cn == nil {
-		log.Printf("[node] sendDirect: no connection to %s", toPeerID[:8])
+	if cn != nil {
+		if err := cn.send(wireMsg); err != nil {
+			log.Printf("[node] sendDirect write to %s: %v", toPeerID[:8], err)
+			n.handleConnWriteError(toPeerID, cn, "direct", err)
+		}
 		return
 	}
-	if err := cn.send(wireMsg); err != nil {
-		log.Printf("[node] sendDirect write to %s: %v", toPeerID[:8], err)
-		n.handleConnWriteError(toPeerID, cn, "direct", err)
+	// No direct connection — try relay via routing table.
+	if !n.sendViaRelay(wireMsg, toPeerID) {
+		log.Printf("[node] sendDirect: no route to %s", toPeerID[:8])
 	}
 }
 
@@ -899,6 +915,11 @@ func (n *Node) completeHandshake(cn *conn, name string, theirPubKey []byte, addr
 	}
 
 	n.emit(Event{Peer: &PeerEvent{Peer: info, Kind: PeerJoined}})
+
+	// Mesh: announce this new peer to all existing neighbors.
+	n.announcePeerToNeighbors(cn.peerID, name, theirPubKey)
+	// Mesh: tell the new peer about all existing peers.
+	n.announceAllExistingPeers(cn)
 }
 
 // ─── read loop ────────────────────────────────────────────────────────────────
@@ -920,14 +941,28 @@ func (n *Node) readLoop(cn *conn) {
 		}
 		cn.c.SetReadDeadline(time.Time{})
 
+		// Mesh: deduplication — skip already-seen messages (except control messages).
+		switch msg.Type {
+		case MsgTypeHello, MsgTypePing, MsgTypePong, MsgTypeLeave:
+			// Control messages are never deduplicated or forwarded.
+		default:
+			if msg.ID != "" && n.isDuplicate(msg.ID) {
+				continue
+			}
+			// Learn routes from every non-control message.
+			n.updateRouteTable(msg, cn.peerID)
+		}
+
 		switch msg.Type {
 		case MsgTypeText:
 			n.maybeUpdatePeerName(msg.PeerID, msg.Name)
 			n.emit(Event{Msg: &msg})
+			n.maybeForward(msg, cn.peerID)
 
 		case MsgTypeDirect:
 			if msg.To != n.id {
-				// Not addressed to us — shouldn't happen with unicast, but guard anyway.
+				// Not for us — relay onward.
+				n.maybeForward(msg, cn.peerID)
 				continue
 			}
 			peer := n.peers.Get(msg.PeerID)
@@ -940,7 +975,7 @@ func (n *Node) readLoop(cn *conn) {
 				log.Printf("[node] decrypt from %s: %v", msg.PeerID[:8], err)
 				continue
 			}
-			msg.Content = plaintext // replace ciphertext with plaintext before emitting
+			msg.Content = plaintext
 			n.maybeUpdatePeerName(msg.PeerID, msg.Name)
 			n.emit(Event{Msg: &msg})
 
@@ -954,23 +989,44 @@ func (n *Node) readLoop(cn *conn) {
 			n.handleGroupLeave(msg)
 
 		case MsgTypeGroupText:
-			n.handleGroupText(msg)
+			if msg.To == n.id {
+				n.handleGroupText(msg)
+			} else {
+				n.maybeForward(msg, cn.peerID)
+			}
 
 		case MsgTypeFileOffer:
-			n.handleFileOffer(msg, cn)
+			if msg.To == n.id {
+				n.handleFileOffer(msg, cn)
+			} else {
+				n.maybeForward(msg, cn.peerID)
+			}
 
 		case MsgTypeFileAccept:
-			n.handleFileAccept(msg)
+			if msg.To == n.id {
+				n.handleFileAccept(msg)
+			} else {
+				n.maybeForward(msg, cn.peerID)
+			}
 
 		case MsgTypeFileChunk:
-			n.handleFileChunk(msg)
+			if msg.To == n.id {
+				n.handleFileChunk(msg)
+			} else {
+				// Don't relay large file chunks — too expensive for relay nodes.
+			}
 
 		case MsgTypeFileDone:
-			n.handleFileDone(msg)
+			if msg.To == n.id {
+				n.handleFileDone(msg)
+			} else {
+				n.maybeForward(msg, cn.peerID)
+			}
 
 		case MsgTypeCallOffer, MsgTypeCallAnswer, MsgTypeCallReject, MsgTypeCallEnd,
 			MsgTypeCallIce, MsgTypeCallBusy, MsgTypeCallAck:
 			if msg.To != n.id {
+				n.maybeForward(msg, cn.peerID)
 				continue
 			}
 			peer := n.peers.Get(msg.PeerID)
@@ -986,12 +1042,15 @@ func (n *Node) readLoop(cn *conn) {
 			msg.Content = plaintext
 			n.emit(Event{Msg: &msg})
 
+		case MsgTypePeerAnnounce:
+			n.handlePeerAnnounce(msg, cn.peerID)
+			n.maybeForward(msg, cn.peerID)
+
 		case MsgTypePing:
 			cn.send(Message{Type: MsgTypePong, PeerID: n.id, Timestamp: time.Now()})
 
 		case MsgTypePong:
-			// Keepalive reply — nothing to do; the successful read already
-			// reset the deadline.
+			// Keepalive reply — nothing to do.
 
 		case MsgTypeLeave:
 			return
@@ -1183,6 +1242,233 @@ func (n *Node) handleFileDone(msg Message) {
 	n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferCompleted}})
 }
 
+// ─── mesh routing ─────────────────────────────────────────────────────────────
+
+// cleanSeenCache periodically removes old entries from the deduplication cache.
+func (n *Node) cleanSeenCache() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-ticker.C:
+			cutoff := time.Now().Add(-30 * time.Minute)
+			n.seenMsgIDs.Range(func(key, value any) bool {
+				if ts, ok := value.(time.Time); ok && ts.Before(cutoff) {
+					n.seenMsgIDs.Delete(key)
+				}
+				return true
+			})
+		}
+	}
+}
+
+// isDuplicate returns true if the message was already seen. Thread-safe.
+func (n *Node) isDuplicate(msgID string) bool {
+	_, loaded := n.seenMsgIDs.LoadOrStore(msgID, time.Now())
+	return loaded
+}
+
+// updateRouteTable learns routes from incoming messages.
+func (n *Node) updateRouteTable(msg Message, viaPeerID string) {
+	if msg.Origin == "" || msg.Origin == n.id {
+		return
+	}
+	n.routeMu.Lock()
+	defer n.routeMu.Unlock()
+	n.routeTable[msg.Origin] = viaPeerID
+	// Also learn routes from hop path entries.
+	for _, hop := range msg.HopPath {
+		if hop != n.id {
+			n.routeTable[hop] = viaPeerID
+		}
+	}
+}
+
+// removeRoutesVia removes all routing table entries that route through the given peer.
+func (n *Node) removeRoutesVia(peerID string) {
+	n.routeMu.Lock()
+	defer n.routeMu.Unlock()
+	for target, nextHop := range n.routeTable {
+		if nextHop == peerID {
+			delete(n.routeTable, target)
+		}
+	}
+}
+
+// RouteTable returns a snapshot of the routing table for diagnostics.
+func (n *Node) RouteTable() map[string]string {
+	n.routeMu.RLock()
+	defer n.routeMu.RUnlock()
+	out := make(map[string]string, len(n.routeTable))
+	for k, v := range n.routeTable {
+		out[k] = v
+	}
+	return out
+}
+
+// Topology returns a list of edges (peerA, peerB) representing known links.
+func (n *Node) Topology() [][2]string {
+	n.mu.Lock()
+	directPeers := make([]string, 0, len(n.connByPeerID))
+	for pid := range n.connByPeerID {
+		directPeers = append(directPeers, pid)
+	}
+	n.mu.Unlock()
+
+	var edges [][2]string
+	// Direct connections from self.
+	for _, pid := range directPeers {
+		edges = append(edges, [2]string{n.id, pid})
+	}
+	// Inferred edges from routing table: if routeTable[X] = Y, then Y-X is a link.
+	n.routeMu.RLock()
+	for target, nextHop := range n.routeTable {
+		if target != nextHop {
+			edges = append(edges, [2]string{nextHop, target})
+		}
+	}
+	n.routeMu.RUnlock()
+	return edges
+}
+
+// floodExcept sends msg to all direct peers except excludeID.
+func (n *Node) floodExcept(msg Message, excludeID string) {
+	n.mu.Lock()
+	conns := make([]*conn, 0, len(n.connByPeerID))
+	for id, c := range n.connByPeerID {
+		if id != excludeID {
+			conns = append(conns, c)
+		}
+	}
+	n.mu.Unlock()
+	for _, c := range conns {
+		if err := c.send(msg); err != nil {
+			log.Printf("[mesh] flood to %s: %v", c.peerID[:8], err)
+		}
+	}
+}
+
+// maybeForward relays msg to other peers if TTL allows.
+func (n *Node) maybeForward(msg Message, sourcePeerID string) {
+	if msg.TTL <= 0 {
+		return
+	}
+	msg.TTL--
+	msg.HopPath = append(append([]string{}, msg.HopPath...), n.id)
+
+	if msg.To == "" {
+		// Broadcast: flood to all except source.
+		n.floodExcept(msg, sourcePeerID)
+		return
+	}
+
+	// Unicast: try routing table first, fallback to flood.
+	n.routeMu.RLock()
+	nextHop := n.routeTable[msg.To]
+	n.routeMu.RUnlock()
+
+	if nextHop != "" && nextHop != sourcePeerID {
+		n.mu.Lock()
+		cn := n.connByPeerID[nextHop]
+		n.mu.Unlock()
+		if cn != nil {
+			if err := cn.send(msg); err != nil {
+				log.Printf("[mesh] relay to %s via %s: %v", msg.To[:8], nextHop[:8], err)
+			}
+			return
+		}
+	}
+	// Fallback: flood except source.
+	n.floodExcept(msg, sourcePeerID)
+}
+
+// sendViaRelay tries to send msg through the routing table when no direct conn exists.
+func (n *Node) sendViaRelay(msg Message, toPeerID string) bool {
+	n.routeMu.RLock()
+	nextHop := n.routeTable[toPeerID]
+	n.routeMu.RUnlock()
+	if nextHop == "" {
+		return false
+	}
+	n.mu.Lock()
+	cn := n.connByPeerID[nextHop]
+	n.mu.Unlock()
+	if cn == nil {
+		return false
+	}
+	if err := cn.send(msg); err != nil {
+		log.Printf("[mesh] sendViaRelay to %s via %s: %v", toPeerID[:8], nextHop[:8], err)
+		return false
+	}
+	log.Printf("[mesh] relayed msg to %s via %s", toPeerID[:8], nextHop[:8])
+	return true
+}
+
+// announcePeerToNeighbors broadcasts a PeerAnnounce for the given peer to all
+// direct neighbors except the peer itself.
+func (n *Node) announcePeerToNeighbors(peerID, peerName string, pubKey []byte) {
+	msg := NewPeerAnnounce(n.id, n.name, peerID, peerName, pubKey)
+	n.floodExcept(msg, peerID)
+}
+
+// announceAllExistingPeers sends announcements for all existing peers to a
+// newly connected peer, so it learns about the rest of the mesh.
+func (n *Node) announceAllExistingPeers(toCn *conn) {
+	peers := n.peers.List()
+	for _, p := range peers {
+		if p.ID == toCn.peerID || p.ID == n.id {
+			continue
+		}
+		msg := NewPeerAnnounce(n.id, n.name, p.ID, p.DisplayName, p.PubKey)
+		toCn.send(msg)
+	}
+}
+
+// handlePeerAnnounce processes a received PeerAnnounce message.
+func (n *Node) handlePeerAnnounce(msg Message, viaPeerID string) {
+	announcedID := msg.To
+	announcedName := msg.Content
+	if announcedID == "" || announcedID == n.id {
+		return
+	}
+
+	// Already directly connected? Skip.
+	n.mu.Lock()
+	_, directlyConnected := n.connByPeerID[announcedID]
+	n.mu.Unlock()
+	if directlyConnected {
+		return
+	}
+
+	// Update routing table.
+	n.routeMu.Lock()
+	n.routeTable[announcedID] = viaPeerID
+	n.routeMu.Unlock()
+
+	// Register in PeerManager with relay info.
+	info, isNew := n.peers.Upsert(announcedID, announcedName, nil, PeerConnected)
+	n.peers.SetRelay(announcedID, true, viaPeerID)
+
+	// Derive shared key from announced pubkey if available.
+	if len(msg.PubKey) == 32 {
+		n.peers.SetPubKey(announcedID, msg.PubKey)
+		shared, err := SharedSecret(n.keyPair.Private, msg.PubKey)
+		if err != nil {
+			log.Printf("[mesh] ECDH with relay peer %s: %v", announcedID[:8], err)
+		} else {
+			n.peers.SetSharedKey(announcedID, shared)
+			log.Printf("[mesh] ECDH key derived for relay peer %s via %s", announcedID[:8], viaPeerID[:8])
+		}
+	}
+
+	if isNew {
+		log.Printf("[mesh] discovered relay peer %s (%s) via %s", announcedName, announcedID[:8], viaPeerID[:8])
+		n.emit(Event{Peer: &PeerEvent{Peer: info, Kind: PeerJoined}})
+	}
+}
+
 // removeConn cleans up after a closed connection. It only emits PeerLeft if
 // the connection being removed is still the one registered in connByPeerID.
 // During simultaneous connection races a newer connection may already have
@@ -1191,13 +1477,13 @@ func (n *Node) removeConn(peerID string, cn *conn) {
 	n.mu.Lock()
 	registered := n.connByPeerID[peerID]
 	if registered != cn {
-		// A newer connection has already replaced this one — don't emit PeerLeft.
 		n.mu.Unlock()
 		return
 	}
 	delete(n.connByPeerID, peerID)
 	n.mu.Unlock()
 	n.peers.SetState(peerID, PeerDisconnected)
+	n.removeRoutesVia(peerID)
 	if info := n.peers.Get(peerID); info != nil {
 		n.emit(Event{Peer: &PeerEvent{Peer: info, Kind: PeerLeft}})
 	}

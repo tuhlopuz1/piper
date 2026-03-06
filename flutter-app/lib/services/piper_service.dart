@@ -500,9 +500,16 @@ class PiperService extends ChangeNotifier {
             avatarStyle: avatarStyleForPeer(p.id),
             initials: initialsFor(p.displayName),
             isOnline: p.isConnected,
-            address: p.id.length > 12 ? '${p.id.substring(0, 12)}…' : p.id,
+            address: p.isRelay
+                ? 'via ${p.relayPeerName ?? 'relay'}'
+                : (p.id.length > 12 ? '${p.id.substring(0, 12)}…' : p.id),
+            isRelay: p.isRelay,
+            relayPeerName: p.relayPeerName,
           ))
       .toList();
+
+  /// Returns the mesh topology data for the graph widget.
+  Map<String, dynamic> get topology => _node?.getTopology() ?? {'nodes': [], 'edges': []};
 
   List<Chat> get chats {
     final result = <Chat>[];

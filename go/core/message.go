@@ -42,6 +42,9 @@ const (
 	MsgTypeCallIce    MsgType = "call_ice"    // either side: {"candidate":"...","sdpMid":"...","sdpMLineIndex":0}
 	MsgTypeCallBusy   MsgType = "call_busy"   // callee/peer → caller: {"call_id":"...","reason":"busy"}
 	MsgTypeCallAck    MsgType = "call_ack"    // either side: {"call_id":"...","ack_seq":N,"ack_type":"call_end"}
+
+	// Mesh message types
+	MsgTypePeerAnnounce MsgType = "peer_announce" // relay: advertise a peer reachable via this node
 )
 
 // Message is the top-level protocol envelope exchanged between peers.
@@ -67,6 +70,11 @@ type Message struct {
 	ChunkSeq   int    `json:"chunk_seq,omitempty"`   // chunk sequence number
 	ChunkData  []byte `json:"chunk_data,omitempty"`  // encrypted chunk data (auto-base64 in JSON)
 
+	// Mesh routing fields
+	TTL     int      `json:"ttl,omitempty"`      // remaining hops; each relay decrements
+	Origin  string   `json:"origin,omitempty"`   // original sender peerID (never changed by relays)
+	HopPath []string `json:"hop_path,omitempty"` // peerIDs of relay nodes this message passed through
+
 	Timestamp time.Time `json:"ts"`
 }
 
@@ -82,6 +90,9 @@ func NewHelloMessage(peerID, name string, pubKey []byte) Message {
 	}
 }
 
+// DefaultTTL is the default hop count for mesh-routed messages.
+const DefaultTTL = 5
+
 // NewTextMessage creates a global broadcast chat message.
 func NewTextMessage(peerID, name, content string) Message {
 	return Message{
@@ -90,6 +101,8 @@ func NewTextMessage(peerID, name, content string) Message {
 		PeerID:    peerID,
 		Name:      name,
 		Content:   content,
+		TTL:       DefaultTTL,
+		Origin:    peerID,
 		Timestamp: time.Now(),
 	}
 }
@@ -105,6 +118,24 @@ func NewDirectMessage(fromID, fromName, toID, content string, nonce []byte) Mess
 		Content:   content,
 		To:        toID,
 		Nonce:     nonce,
+		TTL:       DefaultTTL,
+		Origin:    fromID,
+		Timestamp: time.Now(),
+	}
+}
+
+// NewPeerAnnounce creates a mesh peer announcement message.
+func NewPeerAnnounce(senderID, senderName, announcedPeerID, announcedPeerName string, pubKey []byte) Message {
+	return Message{
+		ID:        uuid.NewString(),
+		Type:      MsgTypePeerAnnounce,
+		PeerID:    senderID,
+		Name:      senderName,
+		To:        announcedPeerID,
+		Content:   announcedPeerName,
+		PubKey:    pubKey,
+		TTL:       3,
+		Origin:    senderID,
 		Timestamp: time.Now(),
 	}
 }

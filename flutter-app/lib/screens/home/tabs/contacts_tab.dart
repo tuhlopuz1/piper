@@ -22,21 +22,21 @@ class ContactsTab extends StatefulWidget {
 
 class _ContactsTabState extends State<ContactsTab>
     with SingleTickerProviderStateMixin {
-  late AnimationController _radarCtrl;
+  late AnimationController _pulseCtrl;
   bool _scanning = true;
 
   @override
   void initState() {
     super.initState();
-    _radarCtrl = AnimationController(
+    _pulseCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 3),
-    )..repeat();
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
   }
 
   @override
   void dispose() {
-    _radarCtrl.dispose();
+    _pulseCtrl.dispose();
     super.dispose();
   }
 
@@ -78,7 +78,7 @@ class _ContactsTabState extends State<ContactsTab>
         child: CustomScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
-            // ── Header ─────────────────────────────────────────────────────
+            // -- Header
             SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.fromLTRB(20, top + 16, 20, 0),
@@ -86,7 +86,7 @@ class _ContactsTabState extends State<ContactsTab>
                   children: [
                     Expanded(
                       child: Text(
-                        'Устройства',
+                        'Mesh-сеть',
                         style: GoogleFonts.inter(
                           fontSize: 28,
                           fontWeight: FontWeight.w800,
@@ -101,20 +101,23 @@ class _ContactsTabState extends State<ContactsTab>
               ),
             ),
 
-            // ── Radar ───────────────────────────────────────────────────────
+            // -- Mesh Graph
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 24),
                 child: Center(
-                  child: _RadarWidget(
-                    controller: _radarCtrl,
+                  child: _MeshGraphWidget(
+                    pulseCtrl: _pulseCtrl,
+                    topology: svc.topology,
+                    myId: svc.myId,
+                    myName: svc.myName,
                     contacts: online,
                   ),
                 ),
               ),
             ),
 
-            // ── Online section ──────────────────────────────────────────────
+            // -- Online section
             if (online.isNotEmpty) ...[
               SliverToBoxAdapter(
                 child: _SectionLabel(
@@ -165,7 +168,7 @@ class _ContactsTabState extends State<ContactsTab>
               ),
             ],
 
-            // ── Offline section ─────────────────────────────────────────────
+            // -- Offline section
             if (offline.isNotEmpty) ...[
               SliverToBoxAdapter(
                 child: _SectionLabel(label: 'НЕ В СЕТИ · ${offline.length}'),
@@ -221,158 +224,242 @@ class _ContactsTabState extends State<ContactsTab>
   }
 }
 
-// ─── Radar Widget ─────────────────────────────────────────────────────────────
+// -- Mesh Graph Widget (force-directed layout) --------------------------------
 
-class _RadarWidget extends StatelessWidget {
-  final AnimationController controller;
+class _MeshGraphWidget extends StatelessWidget {
+  final AnimationController pulseCtrl;
+  final Map<String, dynamic> topology;
+  final String myId;
+  final String myName;
   final List<Contact> contacts;
 
-  const _RadarWidget({required this.controller, required this.contacts});
+  const _MeshGraphWidget({
+    required this.pulseCtrl,
+    required this.topology,
+    required this.myId,
+    required this.myName,
+    required this.contacts,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 220,
-      height: 220,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Rings
-          for (final r in [1.0, 0.67, 0.33])
-            Container(
-              width: 220 * r,
-              height: 220 * r,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: AppColors.primary.withValues(alpha: 0.12),
-                  width: 1,
-                ),
-              ),
-            ),
+    final nodes = (topology['nodes'] as List<dynamic>?) ?? [];
+    final edges = (topology['edges'] as List<dynamic>?) ?? [];
 
-          // Sweep
-          AnimatedBuilder(
-            animation: controller,
-            builder: (_, __) => CustomPaint(
-              size: const Size(220, 220),
-              painter: _RadarSweepPainter(
-                angle: controller.value * 2 * math.pi,
-                color: AppColors.primary,
-              ),
-            ),
-          ),
+    // Build node positions using circular layout around center.
+    final size = 260.0;
+    final center = Offset(size / 2, size / 2);
+    final radius = size / 2 - 30;
 
-          // Contact dots
-          ...contacts.asMap().entries.map((e) {
-            final angle = e.key * (2 * math.pi / math.max(contacts.length, 1)) - math.pi / 2;
-            final dist = e.key.isEven ? 55.0 : 80.0;
-            return Positioned(
-              left: 110 + dist * math.cos(angle) - 16,
-              top: 110 + dist * math.sin(angle) - 16,
-              child: _RadarDot(contact: e.value),
-            );
-          }),
+    // Separate self from others.
+    final otherNodes = nodes.where((n) => n['id'] != myId).toList();
+    final nodeCount = otherNodes.length;
 
-          // Center dot
-          Container(
-            width: 10,
-            height: 10,
-            decoration: const BoxDecoration(
-              color: AppColors.primary,
-              shape: BoxShape.circle,
-            ),
-          )
-              .animate(onPlay: (c) => c.repeat(reverse: true))
-              .scaleXY(end: 1.4, duration: 800.ms, curve: Curves.easeInOut),
-        ],
-      ),
-    );
-  }
-}
-
-class _RadarSweepPainter extends CustomPainter {
-  final double angle;
-  final Color color;
-
-  _RadarSweepPainter({required this.angle, required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2;
-    const sweepWidth = 1.4;
-    const slices = 28;
-
-    // Draw arc slices with linearly increasing opacity — avoids SweepGradient seam
-    for (int i = 0; i < slices; i++) {
-      final t = (i + 1) / slices;
-      final startA = angle - sweepWidth + (i / slices) * sweepWidth;
-      const sliceSize = sweepWidth / slices + 0.005; // tiny overlap
-      canvas.drawArc(
-        Rect.fromCircle(center: center, radius: radius),
-        startA,
-        sliceSize,
-        true,
-        Paint()..color = color.withValues(alpha: t * 0.4),
+    // Map nodeId -> position.
+    final positions = <String, Offset>{};
+    positions[myId] = center;
+    for (int i = 0; i < nodeCount; i++) {
+      final angle = (i * 2 * math.pi / math.max(nodeCount, 1)) - math.pi / 2;
+      positions[otherNodes[i]['id'] as String] = Offset(
+        center.dx + radius * math.cos(angle),
+        center.dy + radius * math.sin(angle),
       );
     }
 
-    // Leading edge line
-    canvas.drawLine(
+    // Build contact lookup for colors.
+    final contactMap = {for (final c in contacts) c.id: c};
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: AnimatedBuilder(
+        animation: pulseCtrl,
+        builder: (context, _) => CustomPaint(
+          painter: _MeshGraphPainter(
+            myId: myId,
+            nodes: nodes,
+            edges: edges,
+            positions: positions,
+            contactMap: contactMap,
+            pulseValue: pulseCtrl.value,
+          ),
+          child: Stack(
+            children: [
+              // Center node label (self)
+              Positioned(
+                left: center.dx - 18,
+                top: center.dy - 18,
+                child: _NodeDot(
+                  label: myName.isNotEmpty ? myName[0].toUpperCase() : '?',
+                  color: AppColors.primary,
+                  isSelf: true,
+                  size: 36,
+                ),
+              ),
+              // Other node labels
+              for (int i = 0; i < nodeCount; i++)
+                Builder(builder: (_) {
+                  final nodeId = otherNodes[i]['id'] as String;
+                  final pos = positions[nodeId]!;
+                  final contact = contactMap[nodeId];
+                  final isRelay = otherNodes[i]['is_relay'] == true;
+                  final displayName = (otherNodes[i]['display_name'] as String?) ??
+                      (otherNodes[i]['name'] as String?) ?? '?';
+                  final color = contact?.avatarStyle.color ?? AppColors.accent;
+                  return Positioned(
+                    left: pos.dx - 15,
+                    top: pos.dy - 15,
+                    child: Tooltip(
+                      message: isRelay ? '$displayName (relay)' : displayName,
+                      child: _NodeDot(
+                        label: displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                        color: color,
+                        isSelf: false,
+                        size: 30,
+                        isRelay: isRelay,
+                      ),
+                    ),
+                  );
+                }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MeshGraphPainter extends CustomPainter {
+  final String myId;
+  final List<dynamic> nodes;
+  final List<dynamic> edges;
+  final Map<String, Offset> positions;
+  final Map<String, Contact> contactMap;
+  final double pulseValue;
+
+  _MeshGraphPainter({
+    required this.myId,
+    required this.nodes,
+    required this.edges,
+    required this.positions,
+    required this.contactMap,
+    required this.pulseValue,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Draw background grid rings.
+    final center = Offset(size.width / 2, size.height / 2);
+    for (final r in [1.0, 0.67, 0.33]) {
+      canvas.drawCircle(
+        center,
+        (size.width / 2) * r,
+        Paint()
+          ..color = AppColors.primary.withValues(alpha: 0.08)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.5,
+      );
+    }
+
+    // Draw edges.
+    for (final edge in edges) {
+      final fromId = edge['from'] as String?;
+      final toId = edge['to'] as String?;
+      if (fromId == null || toId == null) continue;
+      final from = positions[fromId];
+      final to = positions[toId];
+      if (from == null || to == null) continue;
+
+      final isRelayEdge = fromId != myId && toId != myId;
+      final edgePaint = Paint()
+        ..strokeWidth = isRelayEdge ? 1.0 : 1.5
+        ..style = PaintingStyle.stroke;
+
+      if (isRelayEdge) {
+        edgePaint.color = AppColors.accent.withValues(alpha: 0.3 + pulseValue * 0.15);
+      } else {
+        edgePaint.color = AppColors.primary.withValues(alpha: 0.4 + pulseValue * 0.2);
+      }
+
+      canvas.drawLine(from, to, edgePaint);
+
+      // Draw small dot at midpoint for relay edges.
+      if (isRelayEdge) {
+        final mid = Offset((from.dx + to.dx) / 2, (from.dy + to.dy) / 2);
+        canvas.drawCircle(
+          mid,
+          2,
+          Paint()..color = AppColors.accent.withValues(alpha: 0.5),
+        );
+      }
+    }
+
+    // Draw glow around center node.
+    canvas.drawCircle(
       center,
-      center + Offset(radius * math.cos(angle), radius * math.sin(angle)),
+      20 + pulseValue * 4,
       Paint()
-        ..color = color.withValues(alpha: 0.75)
-        ..strokeWidth = 1.5
-        ..style = PaintingStyle.stroke,
+        ..color = AppColors.primary.withValues(alpha: 0.1 + pulseValue * 0.08)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
     );
   }
 
   @override
-  bool shouldRepaint(_RadarSweepPainter old) => old.angle != angle;
+  bool shouldRepaint(_MeshGraphPainter old) => old.pulseValue != pulseValue || old.edges != edges;
 }
 
-class _RadarDot extends StatelessWidget {
-  final Contact contact;
-  const _RadarDot({required this.contact});
+class _NodeDot extends StatelessWidget {
+  final String label;
+  final Color color;
+  final bool isSelf;
+  final double size;
+  final bool isRelay;
+
+  const _NodeDot({
+    required this.label,
+    required this.color,
+    required this.isSelf,
+    required this.size,
+    this.isRelay = false,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: contact.name,
-      child: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: contact.avatarStyle.color,
-          border: Border.all(color: AppColors.bgBase, width: 2),
-          boxShadow: [
-            BoxShadow(
-              color: contact.avatarStyle.color.withValues(alpha: 0.5),
-              blurRadius: 8,
-            ),
-          ],
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color,
+        border: Border.all(
+          color: isRelay
+              ? AppColors.accent.withValues(alpha: 0.7)
+              : AppColors.bgBase,
+          width: isRelay ? 2 : 2,
+          strokeAlign: BorderSide.strokeAlignOutside,
         ),
-        child: Center(
-          child: Text(
-            contact.initials.substring(0, 1),
-            style: GoogleFonts.inter(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: Colors.white,
-            ),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: isSelf ? 0.5 : 0.35),
+            blurRadius: isSelf ? 12 : 8,
+          ),
+        ],
+      ),
+      child: Center(
+        child: Text(
+          label,
+          style: GoogleFonts.inter(
+            fontSize: isSelf ? 14 : 11,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
           ),
         ),
       ),
-    )
-        .animate(onPlay: (c) => c.repeat(reverse: true))
-        .scaleXY(end: 1.1, duration: 1200.ms, curve: Curves.easeInOut);
+    );
   }
 }
 
-// ─── Section label ────────────────────────────────────────────────────────────
+// -- Section label ------------------------------------------------------------
 
 class _SectionLabel extends StatelessWidget {
   final String label;
@@ -397,7 +484,7 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-// ─── Device Tile ──────────────────────────────────────────────────────────────
+// -- Device Tile --------------------------------------------------------------
 
 class _DeviceTile extends StatelessWidget {
   final Contact contact;
@@ -461,13 +548,38 @@ class _DeviceTile extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        contact.name,
-                        style: GoogleFonts.inter(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.foreground,
-                        ),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              contact.name,
+                              style: GoogleFonts.inter(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.foreground,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (contact.isRelay) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: AppColors.accent.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                'relay',
+                                style: GoogleFonts.inter(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.accent,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                       const SizedBox(height: 2),
                       Text(
@@ -544,7 +656,7 @@ class _TileAction extends StatelessWidget {
   }
 }
 
-// ─── Scan button ──────────────────────────────────────────────────────────────
+// -- Scan button --------------------------------------------------------------
 
 class _ScanButton extends StatelessWidget {
   final bool scanning;

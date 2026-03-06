@@ -71,6 +71,8 @@ class Contact {
   final String initials;
   final bool isOnline;
   final String address;
+  final bool isRelay;
+  final String? relayPeerName;
 
   const Contact({
     required this.id,
@@ -79,6 +81,8 @@ class Contact {
     required this.initials,
     required this.isOnline,
     required this.address,
+    this.isRelay = false,
+    this.relayPeerName,
   });
 }
 

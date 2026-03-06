@@ -49,7 +49,10 @@ type ffiEvent struct {
 	Timestamp int64  `json:"ts,omitempty"`
 
 	// Peer event fields
-	PeerState string `json:"peer_state,omitempty"` // "joined", "left"
+	PeerState     string `json:"peer_state,omitempty"`      // "joined", "left"
+	IsRelay       bool   `json:"is_relay,omitempty"`        // peer reachable via relay
+	RelayPeerName string `json:"relay_peer_name,omitempty"` // relay node display name
+	HopPath       string `json:"hop_path,omitempty"`        // comma-separated hop peer IDs
 
 	// Group event fields
 	GroupEventKind string   `json:"group_event,omitempty"` // "created","member_joined","member_left","deleted"
@@ -66,10 +69,13 @@ type ffiEvent struct {
 }
 
 type ffiPeer struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	State       string `json:"state"` // "connecting", "connected", "disconnected"
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	DisplayName   string `json:"display_name"`
+	State         string `json:"state"` // "connecting", "connected", "disconnected"
+	IsRelay       bool   `json:"is_relay,omitempty"`
+	RelayPeerID   string `json:"relay_peer_id,omitempty"`
+	RelayPeerName string `json:"relay_peer_name,omitempty"`
 }
 
 type ffiGroup struct {
@@ -288,12 +294,20 @@ func PiperListPeers(handle C.int) *C.char {
 	peers := e.node.Peers()
 	out := make([]ffiPeer, len(peers))
 	for i, p := range peers {
-		out[i] = ffiPeer{
+		fp := ffiPeer{
 			ID:          p.ID,
 			Name:        p.Name,
 			DisplayName: p.DisplayName,
 			State:       peerStateStr(p.State),
+			IsRelay:     p.IsRelay,
+			RelayPeerID: p.RelayPeerID,
 		}
+		if p.IsRelay && p.RelayPeerID != "" {
+			if rp := e.node.PeerByID(p.RelayPeerID); rp != nil {
+				fp.RelayPeerName = rp.DisplayName
+			}
+		}
+		out[i] = fp
 	}
 	data, _ := json.Marshal(out)
 	return C.CString(string(data))
@@ -315,6 +329,68 @@ func PiperListGroups(handle C.int) *C.char {
 		}
 	}
 	data, _ := json.Marshal(out)
+	return C.CString(string(data))
+}
+
+// ─── Mesh topology ───────────────────────────────────────────────────────────
+
+type ffiEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type ffiTopology struct {
+	Nodes []ffiPeer `json:"nodes"`
+	Edges []ffiEdge `json:"edges"`
+}
+
+//export PiperGetTopology
+func PiperGetTopology(handle C.int) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString("{\"nodes\":[],\"edges\":[]}")
+	}
+
+	// Build node list (self + peers).
+	peers := e.node.Peers()
+	nodes := make([]ffiPeer, 0, len(peers)+1)
+	nodes = append(nodes, ffiPeer{
+		ID:          e.node.ID(),
+		Name:        e.node.Name(),
+		DisplayName: e.node.Name(),
+		State:       "connected",
+	})
+	for _, p := range peers {
+		fp := ffiPeer{
+			ID:          p.ID,
+			Name:        p.Name,
+			DisplayName: p.DisplayName,
+			State:       peerStateStr(p.State),
+			IsRelay:     p.IsRelay,
+			RelayPeerID: p.RelayPeerID,
+		}
+		nodes = append(nodes, fp)
+	}
+
+	// Build edge list.
+	rawEdges := e.node.Topology()
+	edges := make([]ffiEdge, len(rawEdges))
+	for i, re := range rawEdges {
+		edges[i] = ffiEdge{From: re[0], To: re[1]}
+	}
+
+	topo := ffiTopology{Nodes: nodes, Edges: edges}
+	data, _ := json.Marshal(topo)
+	return C.CString(string(data))
+}
+
+//export PiperGetRouteTable
+func PiperGetRouteTable(handle C.int) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString("{}")
+	}
+	data, _ := json.Marshal(e.node.RouteTable())
 	return C.CString(string(data))
 }
 
@@ -429,6 +505,12 @@ func convertEvent(ev core.Event, node *core.Node) ffiEvent {
 		f.Type = "peer"
 		f.PeerID = ev.Peer.Peer.ID
 		f.PeerName = ev.Peer.Peer.DisplayName
+		f.IsRelay = ev.Peer.Peer.IsRelay
+		if ev.Peer.Peer.IsRelay && ev.Peer.Peer.RelayPeerID != "" && node != nil {
+			if rp := node.PeerByID(ev.Peer.Peer.RelayPeerID); rp != nil {
+				f.RelayPeerName = rp.DisplayName
+			}
+		}
 		switch ev.Peer.Kind {
 		case core.PeerJoined:
 			f.PeerState = "joined"
