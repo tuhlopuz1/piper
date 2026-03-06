@@ -168,6 +168,13 @@ class _ContactsTabState extends State<ContactsTab>
               ),
             ],
 
+            // -- Empty state (no peers at all)
+            if (online.isEmpty && offline.isEmpty)
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: _EmptyNetworkState(),
+              ),
+
             // -- Offline section
             if (offline.isNotEmpty) ...[
               SliverToBoxAdapter(
@@ -651,6 +658,92 @@ class _TileAction extends StatelessWidget {
           size: 16,
           color: primary ? AppColors.primaryLight : AppColors.mutedForeground,
         ),
+      ),
+    );
+  }
+}
+
+// -- Empty network state ------------------------------------------------------
+
+class _EmptyNetworkState extends StatelessWidget {
+  const _EmptyNetworkState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 0, 32, 48),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.primary.withValues(alpha: 0.08),
+              border: Border.all(
+                color: AppColors.primary.withValues(alpha: 0.18),
+                width: 1,
+              ),
+            ),
+            child: Icon(
+              Icons.wifi_find_rounded,
+              size: 34,
+              color: AppColors.primary.withValues(alpha: 0.5),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            'Пока никого нет',
+            style: GoogleFonts.inter(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: AppColors.foreground,
+              letterSpacing: -0.3,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Piper ищет устройства в сети.\nПопросите других запустить приложение рядом — они появятся здесь автоматически.',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              color: AppColors.mutedForeground,
+              height: 1.55,
+            ),
+          ),
+          const SizedBox(height: 24),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppColors.bgSubtle,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppColors.border, width: 0.5),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    valueColor: AlwaysStoppedAnimation(AppColors.primaryLight),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Поиск устройств...',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.mutedForeground,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

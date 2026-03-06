@@ -107,6 +107,8 @@ extern char* PiperGetPeerIP(int handle, char* peerID);
 extern int PiperGetTURNPort(int handle);
 extern char* PiperListPeers(int handle);
 extern char* PiperListGroups(int handle);
+extern char* PiperGetTopology(int handle);
+extern char* PiperGetRouteTable(int handle);
 extern void PiperSetEventCallback(int handle, EventCallback cb);
 extern void PiperSetDownloadsDir(int handle, char* dir);
 extern void PiperFreeString(char* s);

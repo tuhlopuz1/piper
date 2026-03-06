@@ -195,8 +195,9 @@ class PiperNode {
     final ptr = _bindings.localIPs(_handle);
     final jsonStr = ptr.toDartString();
     _bindings.freeString(ptr);
-    final list = jsonDecode(jsonStr) as List<dynamic>;
-    return list.map((e) => e as String).toList();
+    final decoded = jsonDecode(jsonStr);
+    if (decoded == null) return const [];
+    return (decoded as List<dynamic>).map((e) => e as String).toList();
   }
 
   /// Returns the UDP port of the local TURN relay server, or 0 if unavailable.

@@ -147,6 +147,7 @@ class CallService extends ChangeNotifier {
   int _iceRestartAttempts = 0;
   static const int _maxIceRestarts = 2;
 
+
   /// Called when a call ends with a record of what happened.
   void Function(CallRecord record)? onCallEnded;
   // Snapshot of call metadata captured at session start, used to build CallRecord.
@@ -190,16 +191,25 @@ class CallService extends ChangeNotifier {
     try {
       final turnPort = _piperNode.getTURNPort();
       if (turnPort > 0) {
-        final localIPs = _piperNode.localIPs();
-        for (final ip in localIPs) {
+        // Use all local IPs (Go's net.Interfaces enumerates ALL interfaces
+        // including the WiFi Direct AP interface that libwebrtc misses).
+        // Each entry points to our OWN TURN server (bound to 0.0.0.0:turnPort),
+        // reachable on every local interface.
+        final ips = _piperNode.localIPs();
+        for (final ip in ips) {
           iceServers.add({
-            'urls': ['turn:$ip:$turnPort'],
+            'urls': ['turn:$ip:$turnPort?transport=udp'],
             'username': 'piperturn',
             'credential': 'piperturnpw',
           });
         }
+        _log('TURN config: port=$turnPort ips=${ips.join(",")}');
+      } else {
+        _log('TURN disabled (port=0)');
       }
-    } catch (_) {}
+    } catch (e) {
+      _log('_buildRtcConfig error: $e');
+    }
     return {
       ..._baseRtcConfig,
       'iceServers': iceServers,
@@ -309,6 +319,7 @@ class CallService extends ChangeNotifier {
 
     final incomingCallId = (data['call_id'] as String?) ?? '';
     final seq = (data['seq'] as num?)?.toInt() ?? 0;
+    _log('signal ← $msgType seq=$seq call=$incomingCallId from=${e.peerId}');
 
     if (incomingCallId.isEmpty && msgType != 'call_offer') {
       _log('drop $msgType without call_id');
@@ -373,6 +384,7 @@ class CallService extends ChangeNotifier {
       _log('accept blocked state=$state');
       return;
     }
+    _log('accepting call=${s.callId}');
 
     try {
       if (!await _requestPermissions(isVideoCall)) {
@@ -409,6 +421,7 @@ class CallService extends ChangeNotifier {
         'call_answer',
         {'sdp': answer.sdp},
       );
+      _log('answer sent call=${s.callId}');
 
       state = CallState.calling;
       _cancelOfferAndRingTimers();
@@ -588,6 +601,7 @@ class CallService extends ChangeNotifier {
 
     _pc!.onIceCandidate = (c) {
       if (c.candidate == null || _session == null) return;
+      _log('ICE candidate: ${c.candidate}');
       _outgoingIceQueue.add({
         'candidate': c.candidate,
         'sdpMid': c.sdpMid,
@@ -601,6 +615,7 @@ class CallService extends ChangeNotifier {
     };
 
     _pc!.onTrack = (e) async {
+      _log('onTrack: kind=${e.track.kind} streams=${e.streams.length}');
       if (e.streams.isNotEmpty) {
         remoteRenderer.srcObject = e.streams.first;
       } else {
@@ -612,17 +627,10 @@ class CallService extends ChangeNotifier {
     };
 
     _pc!.onIceConnectionState = (s) {
+      _log('ICE state → $s');
       if (s == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           s == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
-        if (state != CallState.active) {
-          state = CallState.active;
-          _sessionWasAnswered = true;
-          _startTimer();
-          _cancelOfferAndRingTimers();
-          _touchSignal();
-          _inc('call_established');
-          notifyListeners();
-        }
+        _onCallConnected();
       } else if (s == RTCIceConnectionState.RTCIceConnectionStateFailed) {
         if (_iceRestartAttempts < _maxIceRestarts && _session != null) {
           _iceRestartAttempts++;
@@ -634,6 +642,45 @@ class CallService extends ChangeNotifier {
         }
       }
     };
+
+    // RTCPeerConnectionState fires on Android where RTCIceConnectionState
+    // may not reliably transition to "connected". Handle both.
+    _pc!.onConnectionState = (s) {
+      _log('PC state → $s');
+      if (s == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        _onCallConnected();
+      } else if (s == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+        if (_iceRestartAttempts < _maxIceRestarts && _session != null) {
+          _iceRestartAttempts++;
+          _log('PC failed — restart attempt $_iceRestartAttempts/$_maxIceRestarts');
+          unawaited(_tryIceRestart());
+        } else {
+          _inc('call_stuck_state_recovered');
+          unawaited(endCall());
+        }
+      }
+    };
+
+    _pc!.onIceGatheringState = (s) {
+      _log('ICE gathering → $s');
+    };
+
+    _pc!.onSignalingState = (s) {
+      _log('signaling → $s');
+    };
+  }
+
+  void _onCallConnected() {
+    if (state != CallState.active) {
+      _log('call connected → active');
+      state = CallState.active;
+      _sessionWasAnswered = true;
+      _startTimer();
+      _cancelOfferAndRingTimers();
+      _touchSignal();
+      _inc('call_established');
+      notifyListeners();
+    }
   }
 
   Future<void> _handleOffer(PiperEvent e, Map<String, dynamic> data) async {
@@ -697,6 +744,7 @@ class CallService extends ChangeNotifier {
 
     state = CallState.ringing;
     _inc('call_offer_received');
+    _log('offer received → ringing call=$callId peer=$incomingPeerId isVideo=$isVideoCall');
 
     _startRingWatchdog(callId);
     _touchSignal();
@@ -713,10 +761,12 @@ class CallService extends ChangeNotifier {
       return;
     }
 
+    _log('answer received call=$callId');
     try {
       await _pc?.setRemoteDescription(
         RTCSessionDescription(data['sdp'] as String?, 'answer'),
       );
+      _log('remote desc set (answer), draining ${_pendingIce.length} pending ICE');
       for (final c in _pendingIce) {
         await _pc?.addCandidate(c);
       }
@@ -738,9 +788,11 @@ class CallService extends ChangeNotifier {
     final callId = data['call_id'] as String?;
     if (s == null || callId != s.callId) return;
 
+    final candidateStr = data['candidate'] as String?;
+    _log('ICE ← ${candidateStr?.split(' ').take(8).join(' ')}');
     try {
       final candidate = RTCIceCandidate(
-        data['candidate'] as String?,
+        candidateStr,
         data['sdpMid'] as String?,
         data['sdpMLineIndex'] as int?,
       );
@@ -749,9 +801,12 @@ class CallService extends ChangeNotifier {
         await _pc!.addCandidate(candidate);
       } else {
         _pendingIce.add(candidate);
+        _log('ICE stashed (no remote desc yet, total=${_pendingIce.length})');
       }
       _touchSignal();
-    } catch (_) {}
+    } catch (e) {
+      _log('addCandidate error: $e for candidate=$candidateStr');
+    }
   }
 
   Future<void> _handleRemoteTerminate(

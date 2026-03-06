@@ -254,6 +254,9 @@ func PiperLocalIPs(handle C.int) *C.char {
 		return C.CString("[]")
 	}
 	ips := e.node.LocalIPv4s()
+	if ips == nil {
+		ips = []string{}
+	}
 	data, _ := json.Marshal(ips)
 	return C.CString(string(data))
 }

@@ -352,11 +352,52 @@ func (s *TURNServer) sendAllocOK(m *stunMsg, from *net.UDPAddr) {
 	}
 
 	relayAddr := a.relayConn.LocalAddr().(*net.UDPAddr)
+	// Use the local IP reachable from the client so the peer can actually
+	// send packets to our relay port. 0.0.0.0 is not routable.
+	serverIP := bestLocalIPFor(from.IP)
 	b := newStunBuilder(msgAllocateOK, m.txID)
-	b.addXorAddr(attrXorRelayedAddr, net.IPv4zero, relayAddr.Port, m.txID)
+	b.addXorAddr(attrXorRelayedAddr, serverIP, relayAddr.Port, m.txID)
 	b.addXorAddr(attrXorMappedAddr, from.IP, from.Port, m.txID)
 	b.addU32Attr(attrLifetime, allocLifetime)
 	s.conn.WriteToUDP(b.bytes(), from)
+}
+
+// bestLocalIPFor returns the local IPv4 on the same subnet as clientIP.
+// Falls back to the first non-loopback IPv4 if no match found.
+func bestLocalIPFor(clientIP net.IP) net.IP {
+	ifaces, _ := net.Interfaces()
+	// First: prefer same-subnet IP.
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip4 := ipNet.IP.To4()
+			if ip4 != nil && ipNet.Contains(clientIP) {
+				return ip4
+			}
+		}
+	}
+	// Fallback: first non-loopback IPv4.
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok {
+				if ip4 := ipNet.IP.To4(); ip4 != nil && !ip4.IsLoopback() {
+					return ip4
+				}
+			}
+		}
+	}
+	return net.IPv4zero
 }
 
 func (s *TURNServer) send401(m *stunMsg, from *net.UDPAddr) {

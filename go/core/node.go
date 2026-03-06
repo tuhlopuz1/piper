@@ -135,31 +135,53 @@ func (n *Node) SetName(name string) { n.name = name }
 // assigned to this machine across ALL interfaces — including WiFi AP/hotspot
 // interfaces that Android's ConnectivityManager hides from libwebrtc.
 func (n *Node) LocalIPv4s() []string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
+	seen := make(map[string]bool)
 	var out []string
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 {
-			continue
+	addIP := func(ip net.IP) {
+		ip4 := ip.To4()
+		if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
+			return
 		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			ipnet, ok := a.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			ip4 := ipnet.IP.To4()
-			if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
-				continue
-			}
-			out = append(out, ip4.String())
+		s := ip4.String()
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
 		}
 	}
+
+	// Method 1: net.Interfaces() — works on most platforms.
+	// On Android 10+ it may miss the WiFi Direct AP interface (192.168.43.1)
+	// because the kernel puts it in a restricted namespace.
+	if ifaces, err := net.Interfaces(); err == nil {
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagUp == 0 {
+				continue
+			}
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			for _, a := range addrs {
+				if ipnet, ok := a.(*net.IPNet); ok {
+					addIP(ipnet.IP)
+				}
+			}
+		}
+	}
+
+	// Method 2: scan active TCP connection local addresses.
+	// This reliably catches the AP interface on Android when net.Interfaces()
+	// fails to enumerate it, because the TCP socket is already bound to that IP.
+	n.mu.Lock()
+	for _, c := range n.connByPeerID {
+		if la := c.c.LocalAddr(); la != nil {
+			if tcp, ok := la.(*net.TCPAddr); ok {
+				addIP(tcp.IP)
+			}
+		}
+	}
+	n.mu.Unlock()
+
 	return out
 }
 
@@ -899,6 +921,8 @@ func (n *Node) completeHandshake(cn *conn, name string, theirPubKey []byte, addr
 	n.mu.Unlock()
 
 	info, _ := n.peers.Upsert(cn.peerID, name, addr, PeerConnected)
+	// Direct TCP connection established — clear any previous relay-only state.
+	n.peers.SetRelay(cn.peerID, false, "")
 
 	// Store pubkey and derive shared secret.
 	if len(theirPubKey) == 32 {
