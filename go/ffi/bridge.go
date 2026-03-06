@@ -48,6 +48,7 @@ type ffiEvent struct {
 	MsgType   string `json:"msg_type,omitempty"`
 	PeerID    string `json:"peer_id,omitempty"`
 	PeerName  string `json:"peer_name,omitempty"`
+	PeerAddr  string `json:"peer_addr,omitempty"` // TCP remote IP (included in call events)
 	Content   string `json:"content,omitempty"`
 	To        string `json:"to,omitempty"`
 	GroupID   string `json:"group_id,omitempty"`
@@ -245,6 +246,48 @@ func PiperLeaveGroup(handle C.int, groupID *C.char) {
 	e.node.LeaveGroup(C.GoString(groupID))
 }
 
+// ─── Network helpers ─────────────────────────────────────────────────────────
+
+// PiperLocalIPs returns a JSON array of all non-loopback IPv4 addresses on
+// this device, including hotspot/AP-mode interfaces hidden from libwebrtc.
+// Example: `["192.168.43.1","10.0.0.2"]`
+//
+//export PiperLocalIPs
+func PiperLocalIPs(handle C.int) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString("[]")
+	}
+	ips := e.node.LocalIPv4s()
+	data, _ := json.Marshal(ips)
+	return C.CString(string(data))
+}
+
+// PiperGetPeerIP returns the TCP remote IP for the given peerID, or "".
+//
+//export PiperGetPeerIP
+func PiperGetPeerIP(handle C.int, peerID *C.char) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString("")
+	}
+	return C.CString(e.node.PeerIP(C.GoString(peerID)))
+}
+
+// PiperGetTURNPort returns the UDP port of the local TURN relay server, or 0.
+// Flutter uses this to configure WebRTC relay candidates via
+// turn:<peerIP>:<port> so calls work on WiFi Direct networks where libwebrtc
+// cannot enumerate the AP interface.
+//
+//export PiperGetTURNPort
+func PiperGetTURNPort(handle C.int) C.int {
+	e := getEntry(handle)
+	if e == nil {
+		return 0
+	}
+	return C.int(e.node.TURNPort())
+}
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 //export PiperListPeers
@@ -316,7 +359,7 @@ func eventPump(e *nodeEntry) {
 			if e.cb == nil {
 				continue
 			}
-			fev := convertEvent(ev)
+			fev := convertEvent(ev, e.node)
 			data, err := json.Marshal(fev)
 			if err != nil {
 				log.Printf("[ffi] marshal event: %v", err)
@@ -465,7 +508,7 @@ func getEntry(handle C.int) *nodeEntry {
 	return nodes[handle]
 }
 
-func convertEvent(ev core.Event) ffiEvent {
+func convertEvent(ev core.Event, node *core.Node) ffiEvent {
 	var f ffiEvent
 
 	if ev.Msg != nil {
@@ -480,6 +523,11 @@ func convertEvent(ev core.Event) ffiEvent {
 			f.PeerID = m.PeerID
 			f.PeerName = m.Name
 			f.Content = m.Content // decrypted JSON payload
+			// Include the peer's TCP-layer IP so Flutter can use it for
+			// supplementary ICE candidate injection on WiFi Direct networks.
+			if node != nil {
+				f.PeerAddr = node.PeerIP(m.PeerID)
+			}
 		default:
 			f.Type = "message"
 			f.MsgID = m.ID
