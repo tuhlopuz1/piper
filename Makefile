@@ -12,6 +12,7 @@ PS := powershell -NoProfile -ExecutionPolicy Bypass -File
 
 all:
 	$(PS) scripts\build-windows.ps1 -Target all
+	$(PS) scripts\build-android.ps1
 
 installer:
 	$(PS) scripts\build-windows.ps1 -Target installer
