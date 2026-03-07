@@ -6,7 +6,6 @@ import { Download, Menu, X } from 'lucide-react'
 const links = [
   { label: 'Как работает', href: '#how-it-works' },
   { label: 'Возможности', href: '#features' },
-  { label: 'Скриншоты', href: '#screenshots' },
   { label: 'FAQ', href: '#faq' },
 ]
 
