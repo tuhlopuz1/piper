@@ -26,20 +26,21 @@ const platforms = [
     icon: <FaAndroid className="w-10 h-10 text-indigo-400" />,
   },
   {
-    name: 'macOS',
-    version: 'macOS 12+',
-    size: '~28 MB',
-    url: MACOS_URL,
-    available: true,
-    icon: <FaApple className="w-10 h-10 text-indigo-400" />,
-  },
-  {
     name: 'Linux',
     version: 'Ubuntu, Fedora...',
     size: '~22 MB',
     url: LINUX_URL,
     available: true,
     icon: <FaLinux className="w-10 h-10 text-indigo-400" />,
+  },
+  {
+    name: 'macOS',
+    version: 'macOS 12+',
+    size: '~28 MB',
+    url: MACOS_URL,
+    available: true,
+    badge: 'experimental',
+    icon: <FaApple className="w-10 h-10 text-indigo-400" />,
   },
   {
     name: 'iOS',
@@ -95,9 +96,9 @@ export function DownloadSection() {
                       : 'border-white/10 bg-white/5 opacity-50'
                   }`}
                 >
-                  {!p.available && (
+                  {(p.badge || !p.available) && (
                     <span className="absolute top-3 right-3 text-[10px] bg-white/10 text-white/50 px-2 py-0.5 rounded-full">
-                      скоро
+                      {p.badge ?? 'скоро'}
                     </span>
                   )}
                   <div className="flex justify-center mb-4">{p.icon}</div>
