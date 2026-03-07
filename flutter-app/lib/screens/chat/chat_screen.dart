@@ -628,7 +628,11 @@ class _BubbleContent extends StatelessWidget {
       case MsgType.text:
         content = _TextContent(message: message, bg: bg, fg: fg, radius: radius);
       case MsgType.image:
-        content = _ImageContent(message: message, radius: radius);
+        content = _ImageContent(
+          message: message,
+          radius: radius,
+          transferProgress: progress,
+        );
       case MsgType.file:
         content = _FileContent(message: message, bg: bg, fg: fg, radius: radius, transferProgress: progress);
       case MsgType.voice:
@@ -671,37 +675,113 @@ class _TextContent extends StatelessWidget {
 class _ImageContent extends StatelessWidget {
   final Message message;
   final BorderRadius radius;
-  const _ImageContent({required this.message, required this.radius});
+  final double? transferProgress; // null = ready
+  const _ImageContent({
+    required this.message,
+    required this.radius,
+    this.transferProgress,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final color = message.imageColor ?? AppColors.primary;
+    final imagePath = message.filePath;
+    final hasImagePath = imagePath != null && imagePath.isNotEmpty;
+    final canOpen = hasImagePath && transferProgress == null;
+    final fallbackColor = message.imageColor ?? AppColors.primary;
     return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => MediaViewerScreen(color: color)),
-      ),
+      onTap: canOpen
+          ? () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => MediaViewerScreen(
+                    imagePath: imagePath,
+                    color: fallbackColor,
+                  ),
+                ),
+              )
+          : null,
       child: ClipRRect(
         borderRadius: radius,
         child: AspectRatio(
           aspectRatio: message.imageAspect,
-          child: Container(
-            color: color,
-            child: Stack(
-              alignment: Alignment.bottomRight,
-              children: [
-                Center(
-                  child: Icon(Icons.image_outlined, size: 40, color: Colors.white.withValues(alpha: 0.5)),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(6),
-                  child: _TimeRow(
-                    message: message,
-                    fg: Colors.white.withValues(alpha: 0.85),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (transferProgress != null)
+                // Skeleton while transfer is in progress.
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppColors.mutedForeground.withValues(alpha: 0.18),
+                        AppColors.mutedForeground.withValues(alpha: 0.1),
+                      ],
+                    ),
+                  ),
+                )
+              else if (hasImagePath)
+                Image.file(
+                  File(imagePath),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    color: fallbackColor,
+                    child: Center(
+                      child: Icon(
+                        Icons.broken_image_outlined,
+                        size: 40,
+                        color: Colors.white.withValues(alpha: 0.55),
+                      ),
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  color: fallbackColor,
+                  child: Center(
+                    child: Icon(
+                      Icons.image_outlined,
+                      size: 40,
+                      color: Colors.white.withValues(alpha: 0.5),
+                    ),
                   ),
                 ),
-              ],
-            ),
+              if (transferProgress != null)
+                Center(
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(
+                      value: transferProgress,
+                      strokeWidth: 2.5,
+                      color: Colors.white.withValues(alpha: 0.95),
+                      backgroundColor: Colors.white.withValues(alpha: 0.25),
+                    ),
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.all(6),
+                child: Row(
+                  children: [
+                    if (transferProgress != null)
+                      Text(
+                        '${(transferProgress! * 100).toStringAsFixed(0)}%',
+                        style: GoogleFonts.inter(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white.withValues(alpha: 0.9),
+                        ),
+                      ),
+                    const Spacer(),
+                    _TimeRow(
+                      message: message,
+                      fg: Colors.white.withValues(alpha: 0.85),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ),
