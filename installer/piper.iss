@@ -44,7 +44,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; Desktop shortcut — checked by default
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Дополнительные ярлыки:"
 ; Start menu — checked by default
-Name: "startmenu";   Description: "Создать группу в меню «Пуск»";  GroupDescription: "Дополнительные ярлыки:"
+Name: "startmenu";   Description: "Создать ярлыки в меню «Пуск»";  GroupDescription: "Дополнительные ярлыки:"
 
 [Files]
 Source: "{#BuildDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -52,7 +52,9 @@ Source: "{#BuildDir}\*.dll";     DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\data\*";    DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startmenu
+; Put app + uninstaller in one Start Menu folder ("Piper")
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startmenu
+Name: "{group}\Удалить {#AppName}"; Filename: "{uninstallexe}"; Tasks: startmenu
 Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
