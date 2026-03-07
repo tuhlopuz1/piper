@@ -1,3 +1,5 @@
+//go:build !android
+
 package dht
 
 import (
@@ -10,7 +12,6 @@ import (
 )
 
 // PiperValidator implements record.Validator for the "piper" DHT namespace.
-// It is registered with dht.NamespacedValidator("piper", PiperValidator{}).
 type PiperValidator struct{}
 
 func (PiperValidator) Validate(key string, value []byte) error {
@@ -24,9 +25,6 @@ func (PiperValidator) Validate(key string, value []byte) error {
 	}
 }
 
-// Select picks the best value for a given key.
-// For msg keys: first valid (immutable records).
-// For inbox keys: the record with the most items (CRDT grow-only set).
 func (PiperValidator) Select(key string, values [][]byte) (int, error) {
 	if strings.HasPrefix(key, "/piper/msg/v1/") {
 		for i, v := range values {
@@ -36,7 +34,6 @@ func (PiperValidator) Select(key string, values [][]byte) (int, error) {
 		}
 		return 0, errors.New("piper: no valid msg record")
 	}
-	// Inbox: pick the one with the most items.
 	best, bestCount := 0, -1
 	for i, v := range values {
 		if validateInboxRecord(v) != nil {
@@ -56,8 +53,6 @@ func (PiperValidator) Select(key string, values [][]byte) (int, error) {
 	}
 	return best, nil
 }
-
-// ── validation helpers ───────────────────────────────────────────────────────
 
 func validateMsgRecord(value []byte) error {
 	var rec DHTRecord
@@ -102,17 +97,15 @@ func validateInboxRecord(value []byte) error {
 	return nil
 }
 
-// sigPayloadMsg returns the canonical bytes to sign for a DHTRecord.
 func sigPayloadMsg(rec DHTRecord) ([]byte, error) {
 	return msgpack.Marshal(struct {
-		Box  []byte
-		Exp  time.Time
-		Pub  []byte
-		PID  string
+		Box []byte
+		Exp time.Time
+		Pub []byte
+		PID string
 	}{rec.SealedBox, rec.ExpiresAt, rec.SenderEd25519Pub, rec.SenderPeerID})
 }
 
-// sigPayloadInbox returns the canonical bytes to sign for a DHTInbox.
 func sigPayloadInbox(items []DHTInboxItem) ([]byte, error) {
 	return msgpack.Marshal(items)
 }

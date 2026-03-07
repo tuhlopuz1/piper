@@ -15,7 +15,6 @@ import (
 	"github.com/catsi/piper/mesh/router"
 	"github.com/catsi/piper/mesh/store"
 	"github.com/google/uuid"
-	"github.com/libp2p/go-libp2p/core/host"
 	"go.etcd.io/bbolt"
 )
 
@@ -33,8 +32,8 @@ type Node struct {
 	// Retry queue (initialised after InitStorage)
 	retryQ *queue.RetryQueue
 
-	// DHT store-and-forward (initialised in Start if storage is available)
-	dhtHost      host.Host
+	// DHT store-and-forward (initialised in Start if storage is available;
+	// on Android this is the no-op stub from mesh/dht/stub_android.go)
 	offlineStore *piperdht.OfflineStore
 
 	// Node lifecycle context (cancelled in Stop)
@@ -131,8 +130,8 @@ func (n *Node) Start() error {
 		go n.expireTicker()
 	}
 
-	// DHT initialisation: start after a 3-second gossip settle delay so
-	// the peer table is populated before bootstrapping.
+	// DHT initialisation after a 3-second gossip settle delay.
+	// On Android this creates the no-op stub; on other platforms it starts libp2p.
 	if n.identMgr != nil && n.db != nil {
 		go n.initDHT()
 	}
@@ -140,42 +139,22 @@ func (n *Node) Start() error {
 	return nil
 }
 
-// initDHT starts the libp2p host + kad-dht, bootstraps from the peer table,
-// and fetches any pending messages from our DHT inbox.
+// initDHT starts the OfflineStore (real on non-Android, stub on Android),
+// bootstraps, and fetches any pending messages from our DHT inbox.
 func (n *Node) initDHT() {
 	time.Sleep(3 * time.Second)
 
-	// Use meshPort+1 for the DHT host.
 	meshPort := n.legacy.LocalEndpoint().Port
-	h, err := piperdht.NewHost(n.identMgr.Keys, meshPort+1)
+	offlineStore, err := piperdht.NewOfflineStore(n.ctx, n.identMgr.Keys, n.id, meshPort, n.db)
 	if err != nil {
-		log.Printf("[mesh] initDHT: NewHost: %v", err)
+		log.Printf("[mesh] initDHT: NewOfflineStore: %v", err)
 		return
 	}
-	n.dhtHost = h
+	n.offlineStore = offlineStore
 
-	kadDHT, err := piperdht.NewKadDHT(n.ctx, h)
-	if err != nil {
-		log.Printf("[mesh] initDHT: NewKadDHT: %v", err)
-		h.Close()
-		return
-	}
+	offlineStore.Bootstrap(n.ctx, n.table.All())
 
-	n.offlineStore = piperdht.NewOfflineStore(n.identMgr.Keys, n.id, kadDHT, n.db)
-
-	// Bootstrap from known peers that advertise identity keys.
-	bootstrapPeers := piperdht.BootstrapPeers(n.table.All(), 1)
-	for _, pInfo := range bootstrapPeers {
-		if err := h.Connect(n.ctx, pInfo); err != nil {
-			log.Printf("[mesh] initDHT: connect to %s: %v", pInfo.ID, err)
-		}
-	}
-	if err := kadDHT.Bootstrap(n.ctx); err != nil {
-		log.Printf("[mesh] initDHT: Bootstrap: %v", err)
-	}
-
-	// Fetch pending messages from our DHT inbox.
-	if err := n.offlineStore.FetchAndDeliver(n.ctx, n.emitDHTMessage); err != nil {
+	if err := offlineStore.FetchAndDeliver(n.ctx, n.emitDHTMessage); err != nil {
 		log.Printf("[mesh] initDHT: FetchAndDeliver: %v", err)
 	}
 }
@@ -204,8 +183,8 @@ func (n *Node) Stop() {
 	}
 	n.watchdog.Stop()
 	n.legacy.Stop()
-	if n.dhtHost != nil {
-		n.dhtHost.Close()
+	if n.offlineStore != nil {
+		n.offlineStore.Close()
 	}
 	if n.db != nil {
 		n.db.Close()
@@ -231,7 +210,6 @@ func (n *Node) Send(text, toPeerID string) {
 		return
 	}
 	if n.retryQ == nil {
-		// No storage: fall through to legacy (which will likely fail silently).
 		n.legacy.Send(text, toPeerID)
 		return
 	}
@@ -273,7 +251,6 @@ func (n *Node) PendingCount(peerID string) int {
 	if err != nil {
 		return 0
 	}
-	// Re-enqueue since Flush deletes.
 	for _, e := range entries {
 		_ = n.retryQ.Enqueue(e)
 	}
@@ -282,21 +259,10 @@ func (n *Node) PendingCount(peerID string) int {
 
 // DHTDiag returns diagnostic information about the DHT subsystem.
 func (n *Node) DHTDiag() map[string]interface{} {
-	diag := map[string]interface{}{"status": "unavailable"}
-	if n.dhtHost == nil {
-		return diag
+	if n.offlineStore == nil {
+		return map[string]interface{}{"status": "unavailable"}
 	}
-	peers := n.dhtHost.Network().Peers()
-	addrs := n.dhtHost.Addrs()
-	addrStrs := make([]string, len(addrs))
-	for i, a := range addrs {
-		addrStrs[i] = a.String()
-	}
-	diag["status"] = "ok"
-	diag["peer_id"] = n.dhtHost.ID().String()
-	diag["dht_peers"] = len(peers)
-	diag["addrs"] = addrStrs
-	return diag
+	return n.offlineStore.Diag()
 }
 
 // ── internal helpers ─────────────────────────────────────────────────────────
@@ -340,14 +306,14 @@ func (n *Node) expireTicker() {
 }
 
 // escalateToDHT publishes all queued messages for peerID to the DHT.
-// Called by meshRouter.Recompute when the link is declared dead.
+// Called by meshRouter.Recompute when the watchdog declares a link dead.
 func (n *Node) escalateToDHT(peerID string) {
 	if n.offlineStore == nil || n.retryQ == nil {
 		return
 	}
 	peer := n.table.Get(peerID)
 	if peer == nil || len(peer.IdentityX25519Pub) != 32 {
-		return // recipient's identity unknown — can't seal
+		return
 	}
 	var recipientPub [32]byte
 	copy(recipientPub[:], peer.IdentityX25519Pub)

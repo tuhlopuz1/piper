@@ -1,3 +1,5 @@
+//go:build !android
+
 package dht
 
 import (
@@ -14,16 +16,8 @@ import (
 
 const bucketDHTSeen = "dht_seen"
 
-// DeliveredMsg is passed to the deliver callback in FetchAndDeliver.
-type DeliveredMsg struct {
-	MsgID        string
-	Text         string
-	SenderPeerID string
-}
-
 // FetchAndDeliver retrieves messages from our DHT inbox and calls deliver for
-// each new message. Already-delivered messages are tracked in bbolt so
-// cross-restart duplicates are suppressed.
+// each new message. Already-delivered messages are tracked in bbolt.
 func (s *OfflineStore) FetchAndDeliver(ctx context.Context, deliver func(DeliveredMsg)) error {
 	inboxKey := InboxKey(s.keys.X25519Pub)
 
@@ -31,7 +25,7 @@ func (s *OfflineStore) FetchAndDeliver(ctx context.Context, deliver func(Deliver
 	inboxBytes, err := s.kadDHT.GetValue(getCtx, inboxKey)
 	cancel()
 	if err != nil {
-		return nil // no inbox or not reachable — not an error
+		return nil // no inbox or not reachable
 	}
 
 	var inbox DHTInbox
@@ -50,7 +44,6 @@ func (s *OfflineStore) FetchAndDeliver(ctx context.Context, deliver func(Deliver
 			continue
 		}
 
-		// Fetch message payload.
 		recCtx, recCancel := context.WithTimeout(ctx, 15*time.Second)
 		recBytes, err := s.kadDHT.GetValue(recCtx, MsgKey(item.MsgID))
 		recCancel()
@@ -64,7 +57,6 @@ func (s *OfflineStore) FetchAndDeliver(ctx context.Context, deliver func(Deliver
 			continue
 		}
 
-		// Verify signature.
 		if len(rec.SenderEd25519Pub) != ed25519.PublicKeySize {
 			continue
 		}
@@ -74,14 +66,12 @@ func (s *OfflineStore) FetchAndDeliver(ctx context.Context, deliver func(Deliver
 			continue
 		}
 
-		// Decrypt.
 		plain, err := identity.Open(s.keys.X25519Priv, s.keys.X25519Pub, rec.SealedBox)
 		if err != nil {
 			log.Printf("[dht] FetchAndDeliver: decrypt msg %s: %v", item.MsgID, err)
 			continue
 		}
 
-		// Mark seen before delivering to prevent re-delivery on crash.
 		s.markSeen(item.MsgID, rec.ExpiresAt)
 		deliver(DeliveredMsg{
 			MsgID:        item.MsgID,
@@ -91,7 +81,6 @@ func (s *OfflineStore) FetchAndDeliver(ctx context.Context, deliver func(Deliver
 		toClaim = append(toClaim, item)
 	}
 
-	// Prune claimed items from inbox in the background.
 	if len(toClaim) > 0 {
 		go func() {
 			pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -102,7 +91,6 @@ func (s *OfflineStore) FetchAndDeliver(ctx context.Context, deliver func(Deliver
 	return nil
 }
 
-// pruneInbox removes claimed items from the inbox and re-publishes it.
 func (s *OfflineStore) pruneInbox(ctx context.Context, inboxKey string, claimed, all []DHTInboxItem) {
 	claimedIDs := make(map[string]bool, len(claimed))
 	for _, it := range claimed {
@@ -119,8 +107,6 @@ func (s *OfflineStore) pruneInbox(ctx context.Context, inboxKey string, claimed,
 		log.Printf("[dht] pruneInbox: %v", err)
 	}
 }
-
-// ── bbolt seen-cache helpers ─────────────────────────────────────────────────
 
 func (s *OfflineStore) isSeen(msgID string) bool {
 	seen := false
