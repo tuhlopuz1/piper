@@ -30,11 +30,18 @@ class _DeviceInfoScreenState extends State<DeviceInfoScreen> {
         type: InternetAddressType.IPv4,
         includeLoopback: false,
       );
-      for (final iface in interfaces) {
-        if (iface.addresses.isNotEmpty) {
-          ip = iface.addresses.first.address;
-          break;
-        }
+      // Skip virtual adapters (WSL, Docker, VMware, VirtualBox, Hyper-V).
+      // They appear before physical interfaces on Windows but use 172.x ranges.
+      const virtualPrefixes = ['wsl', 'docker', 'vmware', 'virtualbox', 'vethernet', 'hyperv', 'hyper-v', 'loopback'];
+      bool isVirtual(NetworkInterface iface) {
+        final name = iface.name.toLowerCase();
+        return virtualPrefixes.any((p) => name.contains(p));
+      }
+      // Prefer physical interfaces; fall back to any interface if none found.
+      final physical = interfaces.where((i) => i.addresses.isNotEmpty && !isVirtual(i));
+      final candidates = physical.isNotEmpty ? physical : interfaces.where((i) => i.addresses.isNotEmpty);
+      if (candidates.isNotEmpty) {
+        ip = candidates.first.addresses.first.address;
       }
       if (mounted) {
         setState(() {
