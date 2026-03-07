@@ -79,6 +79,15 @@ typedef _InjectPeersDart = void Function(int handle, Pointer<Utf8> recordsJSON);
 typedef _FreeStringC = Void Function(Pointer<Utf8> s);
 typedef _FreeStringDart = void Function(Pointer<Utf8> s);
 
+typedef _OpenProxyC = Int32 Function(Int32 handle, Pointer<Utf8> peerID, Pointer<Utf8> remoteIcePwd);
+typedef _OpenProxyDart = int Function(int handle, Pointer<Utf8> peerID, Pointer<Utf8> remoteIcePwd);
+
+typedef _CloseProxyC = Void Function(Int32 handle, Pointer<Utf8> peerID);
+typedef _CloseProxyDart = void Function(int handle, Pointer<Utf8> peerID);
+
+typedef _MeshDiagC = Pointer<Utf8> Function(Int32 handle);
+typedef _MeshDiagDart = Pointer<Utf8> Function(int handle);
+
 class PiperBindings {
   late final DynamicLibrary _lib;
 
@@ -104,6 +113,9 @@ class PiperBindings {
   late final _GetLocalInfoDart getLocalInfo;
   late final _InjectPeersDart injectPeers;
   late final _FreeStringDart freeString;
+  late final _OpenProxyDart openProxy;
+  late final _CloseProxyDart closeProxy;
+  late final _MeshDiagDart meshDiag;
 
   PiperBindings({String? libraryPath}) {
     _lib = DynamicLibrary.open(libraryPath ?? _defaultLibPath());
@@ -152,6 +164,12 @@ class PiperBindings {
         .lookupFunction<_InjectPeersC, _InjectPeersDart>('PiperInjectPeers');
     freeString = _lib
         .lookupFunction<_FreeStringC, _FreeStringDart>('PiperFreeString');
+    openProxy = _lib
+        .lookupFunction<_OpenProxyC, _OpenProxyDart>('PiperOpenProxy');
+    closeProxy = _lib
+        .lookupFunction<_CloseProxyC, _CloseProxyDart>('PiperCloseProxy');
+    meshDiag = _lib
+        .lookupFunction<_MeshDiagC, _MeshDiagDart>('PiperMeshDiag');
   }
 
   static String _defaultLibPath() {

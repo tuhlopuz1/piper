@@ -253,6 +253,27 @@ class PiperNode {
         .toList();
   }
 
+  // ─── Mesh proxy ────────────────────────────────────────────────────────────
+
+  /// Opens a localhost UDP proxy for [peerId] and returns the port number,
+  /// or -1 on error. Call after setRemoteDescription with the ICE password
+  /// extracted from the remote SDP.
+  int openProxy(String peerId, String remoteIcePwd) {
+    final peerIdPtr = peerId.toNativeUtf8();
+    final icePwdPtr = remoteIcePwd.toNativeUtf8();
+    final port = _bindings.openProxy(_handle, peerIdPtr, icePwdPtr);
+    malloc.free(peerIdPtr);
+    malloc.free(icePwdPtr);
+    return port;
+  }
+
+  /// Closes the UDP proxy previously opened for [peerId].
+  void closeProxy(String peerId) {
+    final ptr = peerId.toNativeUtf8();
+    _bindings.closeProxy(_handle, ptr);
+    malloc.free(ptr);
+  }
+
   // ─── Internal ──────────────────────────────────────────────────────────────
 
   void _setupEventCallback() {

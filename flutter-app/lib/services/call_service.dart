@@ -1200,6 +1200,40 @@ class CallService extends ChangeNotifier {
     }());
   }
 
+  // ─── Mesh proxy ──────────────────────────────────────────────────────────
+
+  /// Call after setRemoteDescription — extracts ice-pwd from [remoteSdp],
+  /// opens a Go UDP proxy, and injects a single localhost ICE candidate so
+  /// that libwebrtc routes DTLS/SRTP through the mesh layer.
+  Future<void> attachMeshProxy(String peerId, String remoteSdp) async {
+    final icePwd = _extractIcePwd(remoteSdp);
+    final iceUfrag = _extractIceUfrag(remoteSdp);
+    if (icePwd == null) throw Exception('no ice-pwd in remote SDP');
+
+    final port = _piperNode.openProxy(peerId, icePwd);
+    if (port < 0) throw Exception('Go proxy unavailable for $peerId');
+
+    final ufragSuffix = iceUfrag != null ? ' ufrag $iceUfrag' : '';
+    await _pc!.addCandidate(RTCIceCandidate(
+      'candidate:1 1 UDP 2130706431 127.0.0.1 $port typ host$ufragSuffix',
+      '0',
+      0,
+    ));
+  }
+
+  /// Closes the mesh proxy opened for [peerId].
+  void detachMeshProxy(String peerId) {
+    _piperNode.closeProxy(peerId);
+  }
+
+  String? _extractIcePwd(String sdp) =>
+      RegExp(r'a=ice-pwd:(\S+)').firstMatch(sdp)?.group(1);
+
+  String? _extractIceUfrag(String sdp) =>
+      RegExp(r'a=ice-ufrag:(\S+)').firstMatch(sdp)?.group(1);
+
+  // ─────────────────────────────────────────────────────────────────────────
+
   void _log(String msg) {
     final line = '${DateTime.now().toIso8601String()} $msg';
     _eventLog.addLast(line);
