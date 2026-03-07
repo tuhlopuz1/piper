@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
+import '../../services/piper_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../chat/chat_screen.dart';
 
@@ -17,15 +19,68 @@ class _SearchScreenState extends State<SearchScreen> {
   final _ctrl = TextEditingController();
   String _query = '';
 
-  List<Chat> get _chatResults => mockChats
-      .where((c) => c.name.toLowerCase().contains(_query.toLowerCase()))
-      .toList();
+  List<Chat> _searchPool(PiperService svc) {
+    final merged = <String, Chat>{for (final chat in svc.chats) chat.id: chat};
 
-  List<Chat> get _messageResults => mockChats
-      .where((c) =>
-          _query.isNotEmpty &&
-          c.lastMessage.toLowerCase().contains(_query.toLowerCase()))
-      .toList();
+    // Add known contacts even if there is no chat history yet.
+    for (final contact in svc.contacts) {
+      merged.putIfAbsent(
+        contact.id,
+        () => Chat(
+          id: contact.id,
+          name: contact.name,
+          lastMessage: '',
+          lastMessageTime: DateTime.now(),
+          unreadCount: 0,
+          isGroup: false,
+          avatarStyle: contact.avatarStyle,
+          initials: contact.initials,
+          isOnline: contact.isOnline,
+          lastMessageType: MessageType.text,
+        ),
+      );
+    }
+
+    // Add groups even if they don't have messages yet.
+    for (final group in svc.groups) {
+      final chatId = 'group:${group.id}';
+      merged.putIfAbsent(
+        chatId,
+        () => Chat(
+          id: chatId,
+          name: group.name,
+          lastMessage: '',
+          lastMessageTime: DateTime.now(),
+          unreadCount: 0,
+          isGroup: true,
+          avatarStyle: AvatarStyle.indigo,
+          initials: svc.initialsFor(group.name),
+          isOnline: false,
+          lastMessageType: MessageType.text,
+          memberCount: group.members.length,
+        ),
+      );
+    }
+
+    final chats = merged.values.toList();
+    chats.sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
+    return chats;
+  }
+
+  List<Chat> _chatResults(List<Chat> searchPool) {
+    final query = _query.trim().toLowerCase();
+    return searchPool
+        .where((c) => c.name.toLowerCase().contains(query))
+        .toList();
+  }
+
+  List<Chat> _messageResults(List<Chat> searchPool) {
+    if (_query.trim().isEmpty) return const [];
+    final query = _query.trim().toLowerCase();
+    return searchPool
+        .where((c) => c.lastMessage.toLowerCase().contains(query))
+        .toList();
+  }
 
   @override
   void dispose() {
@@ -36,6 +91,10 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
+    final svc = context.watch<PiperService>();
+    final searchPool = _searchPool(svc);
+    final chatResults = _chatResults(searchPool);
+    final messageResults = _messageResults(searchPool);
 
     return Scaffold(
       backgroundColor: AppColors.bgBase,
@@ -98,35 +157,35 @@ class _SearchScreenState extends State<SearchScreen> {
                 ? _EmptyState()
                 : CustomScrollView(
                     slivers: [
-                      if (_chatResults.isNotEmpty) ...[
+                      if (chatResults.isNotEmpty) ...[
                         _SectionHeader(title: 'Чаты и контакты'),
                         SliverList(
                           delegate: SliverChildBuilderDelegate(
                             (_, i) => _SearchChatTile(
-                              chat: _chatResults[i],
+                              chat: chatResults[i],
                               query: _query,
                             )
                                 .animate(delay: Duration(milliseconds: i * 40))
                                 .fadeIn(duration: 200.ms),
-                            childCount: _chatResults.length,
+                            childCount: chatResults.length,
                           ),
                         ),
                       ],
-                      if (_messageResults.isNotEmpty) ...[
+                      if (messageResults.isNotEmpty) ...[
                         _SectionHeader(title: 'Сообщения'),
                         SliverList(
                           delegate: SliverChildBuilderDelegate(
                             (_, i) => _SearchMessageTile(
-                              chat: _messageResults[i],
+                              chat: messageResults[i],
                               query: _query,
                             )
                                 .animate(delay: Duration(milliseconds: i * 40))
                                 .fadeIn(duration: 200.ms),
-                            childCount: _messageResults.length,
+                            childCount: messageResults.length,
                           ),
                         ),
                       ],
-                      if (_chatResults.isEmpty && _messageResults.isEmpty)
+                      if (chatResults.isEmpty && messageResults.isEmpty)
                         SliverFillRemaining(child: _NoResults(query: _query)),
                     ],
                   ),
