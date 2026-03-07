@@ -6,6 +6,7 @@ import { FaAndroid, FaApple, FaLinux, FaWindows } from 'react-icons/fa'
 
 const WINDOWS_URL = 'https://github.com/tuhlopuz1/piper/releases/download/release-piper/piper.exe'
 const ANDROID_URL = 'https://github.com/tuhlopuz1/piper/releases/download/release-piper/app-release.apk'
+const MACOS_URL = 'https://github.com/tuhlopuz1/piper/releases/latest/download/piper-macos.dmg'
 
 const platforms = [
   {
@@ -20,9 +21,8 @@ const platforms = [
   },
   {
     name: 'macOS',
-    url: '#',
+    url: MACOS_URL,
     icon: <FaApple className="w-5 h-5" />,
-    soon: true,
   },
   {
     name: 'Linux',
