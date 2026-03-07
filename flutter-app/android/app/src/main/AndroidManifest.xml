@@ -26,6 +26,14 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
         android:maxSdkVersion="30" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <!-- WiFi Direct discovery — required on API 31-32 (API ≤30 covered above, API 33+ by NEARBY_WIFI_DEVICES) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:minSdkVersion="31"
+        android:maxSdkVersion="32" />
+    <!-- Android 13+ (API 33+) replaces location permission for WiFi peer scan -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
 
     <application
         android:label="piper"
