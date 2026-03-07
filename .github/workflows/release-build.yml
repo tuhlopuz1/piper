@@ -2,7 +2,12 @@ name: Release Build
 
 on:
   push:
+    branches:
+      - "**"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   linux:
@@ -219,3 +224,92 @@ jobs:
         with:
           name: piper-android
           path: flutter-app/build/app/outputs/flutter-apk/app-release.apk
+
+  publish_release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - linux
+      - macos
+      - windows
+      - android
+    if: github.event_name == 'push'
+    steps:
+      - name: Compute next version
+        id: version
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner,
+              repo,
+              per_page: 100
+            });
+
+            const semverRegex = /^v(\d+)\.(\d+)\.(\d+)$/;
+            const versions = releases
+              .map((r) => r.tag_name)
+              .map((tag) => {
+                const m = tag.match(semverRegex);
+                if (!m) return null;
+                return {
+                  tag,
+                  major: Number(m[1]),
+                  minor: Number(m[2]),
+                  patch: Number(m[3]),
+                };
+              })
+              .filter(Boolean)
+              .sort((a, b) => {
+                if (a.major !== b.major) return b.major - a.major;
+                if (a.minor !== b.minor) return b.minor - a.minor;
+                return b.patch - a.patch;
+              });
+
+            let major = 0;
+            let minor = 0;
+            let patch = 0;
+            if (versions.length > 0) {
+              major = versions[0].major;
+              minor = versions[0].minor;
+              patch = versions[0].patch;
+            }
+
+            const commitTitle = (context.payload.head_commit?.message || "").split("\n")[0].trim();
+            if (commitTitle.startsWith("*")) {
+              minor += 1;
+              patch = 0;
+            } else {
+              patch += 1;
+            }
+
+            const nextTag = `v${major}.${minor}.${patch}`;
+            core.info(`Commit title: "${commitTitle}"`);
+            core.info(`Next release tag: ${nextTag}`);
+            core.setOutput("tag", nextTag);
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifact files
+        run: |
+          mkdir -p release-assets
+          find dist -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.apk" \) -exec cp {} release-assets/ \;
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            release-assets/piper-linux.tar.gz
+            release-assets/piper-macos.zip
+            release-assets/piper-windows.zip
+            release-assets/app-release.apk
+          generate_release_notes: true
