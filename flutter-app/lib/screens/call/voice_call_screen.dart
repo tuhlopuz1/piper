@@ -6,6 +6,7 @@ import '../../models/chat.dart';
 import '../../services/call_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../../widgets/call_device_sheet.dart';
+import '../../widgets/call_quality_indicator.dart';
 
 class VoiceCallScreen extends StatefulWidget {
   const VoiceCallScreen({super.key});
@@ -120,6 +121,39 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
                     duration: 1800.ms,
                     color: AppColors.primaryLight.withValues(alpha: 0.6),
                   ),
+
+              if (cs.state == CallState.active) ...[
+                const SizedBox(height: 12),
+                const CallQualityIndicator(),
+              ],
+
+              if (cs.metrics.quality == CallQuality.poor)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16, left: 32, right: 32),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: AppColors.destructive.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppColors.destructive.withValues(alpha: 0.4)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.signal_cellular_connected_no_internet_0_bar_rounded,
+                            color: AppColors.destructive, size: 16),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            'Плохое соединение',
+                            style: GoogleFonts.inter(
+                                fontSize: 12, color: AppColors.destructive),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
 
               const Spacer(),
 

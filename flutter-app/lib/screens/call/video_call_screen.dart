@@ -9,6 +9,7 @@ import '../../models/chat.dart';
 import '../../services/call_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../../widgets/call_device_sheet.dart';
+import '../../widgets/call_quality_indicator.dart';
 
 AvatarStyle _avatarStyleForPeer(String peerId) {
   if (peerId.isEmpty) return AvatarStyle.violet;
@@ -124,16 +125,59 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                     color: Colors.white,
                   ),
                 ),
-                Text(
-                  cs.state == CallState.active
-                      ? 'Видеозвонок'
-                      : 'Соединяется...',
-                  style:
-                      GoogleFonts.inter(fontSize: 12, color: Colors.white70),
+                const SizedBox(height: 2),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      cs.state == CallState.active
+                          ? 'Видеозвонок'
+                          : 'Соединяется...',
+                      style:
+                          GoogleFonts.inter(fontSize: 12, color: Colors.white70),
+                    ),
+                    if (cs.state == CallState.active) ...[
+                      const SizedBox(width: 8),
+                      const CallQualityIndicator(compact: true),
+                    ],
+                  ],
                 ),
               ],
             ),
           ),
+
+          // ── Network warning overlay ──────────────────────────────────────
+          if (cs.state == CallState.active &&
+              (cs.metrics.quality == CallQuality.poor || cs.isVideoDegraded))
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 52,
+              left: 12,
+              right: 12,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.7),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.destructive.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.signal_cellular_connected_no_internet_0_bar_rounded,
+                          color: AppColors.destructive, size: 14),
+                      const SizedBox(width: 6),
+                      Text(
+                        cs.isVideoDegraded
+                            ? 'Видео отключено — плохое соединение'
+                            : 'Плохое соединение',
+                        style: GoogleFonts.inter(fontSize: 11, color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
           // ── Draggable PiP (local camera) ───────────────────────────────────
           Positioned(

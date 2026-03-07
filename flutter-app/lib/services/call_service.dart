@@ -16,6 +16,31 @@ enum CallState { idle, calling, ringing, active }
 
 enum CallDirection { incoming, outgoing }
 
+enum CallQuality { unknown, good, fair, poor }
+
+class CallMetrics {
+  final double rttMs;
+  final double jitterMs;
+  final double packetLossPercent;
+  final double audioLevel;
+  final CallQuality quality;
+
+  const CallMetrics({
+    this.rttMs = 0,
+    this.jitterMs = 0,
+    this.packetLossPercent = 0,
+    this.audioLevel = 0,
+    this.quality = CallQuality.unknown,
+  });
+
+  static CallQuality computeQuality(double rttMs, double jitterMs, double lossPercent) {
+    if (rttMs <= 0 && jitterMs <= 0 && lossPercent <= 0) return CallQuality.unknown;
+    if (rttMs < 150 && jitterMs < 30 && lossPercent < 2) return CallQuality.good;
+    if (rttMs < 300 && jitterMs < 50 && lossPercent < 5) return CallQuality.fair;
+    return CallQuality.poor;
+  }
+}
+
 class CallSession {
   final String callId;
   final String peerId;
@@ -75,6 +100,13 @@ class CallService extends ChangeNotifier {
 
   String? callError;
 
+  CallMetrics metrics = const CallMetrics();
+  Timer? _statsTimer;
+  int _prevPacketsReceived = 0;
+  int _prevPacketsLost = 0;
+  bool _videoDegraded = false;
+  int _consecutivePoorCount = 0;
+
   String? selectedMicId;
   String? selectedCameraId;
   String? selectedSpeakerId;
@@ -131,6 +163,7 @@ class CallService extends ChangeNotifier {
   String? get currentCallId => _session?.callId;
   Map<String, int> get counters => Map.unmodifiable(_counters);
   List<String> get recentCallLog => List.unmodifiable(_eventLog);
+  bool get isVideoDegraded => _videoDegraded;
 
   void init(PiperNode node) {
     _piperNode = node;
@@ -193,13 +226,17 @@ class CallService extends ChangeNotifier {
         'offerToReceiveAudio': true,
         'offerToReceiveVideo': isVideo,
       });
-      await _pc!.setLocalDescription(offer);
+      final optimizedOffer = RTCSessionDescription(
+        _optimizeSdpForLowLatency(offer.sdp),
+        offer.type,
+      );
+      await _pc!.setLocalDescription(optimizedOffer);
 
       _inc('call_offer_sent');
       await _sendSignal(
         'call_offer',
         {
-          'sdp': offer.sdp,
+          'sdp': optimizedOffer.sdp,
           'is_video': isVideo,
         },
       );
@@ -319,10 +356,14 @@ class CallService extends ChangeNotifier {
       _pendingIce.clear();
 
       final answer = await _pc!.createAnswer();
-      await _pc!.setLocalDescription(answer);
+      final optimizedAnswer = RTCSessionDescription(
+        _optimizeSdpForLowLatency(answer.sdp),
+        answer.type,
+      );
+      await _pc!.setLocalDescription(optimizedAnswer);
       await _sendSignal(
         'call_answer',
-        {'sdp': answer.sdp},
+        {'sdp': optimizedAnswer.sdp},
       );
 
       state = CallState.calling;
@@ -829,6 +870,7 @@ class CallService extends ChangeNotifier {
     _callTimer?.cancel();
     _callTimer = null;
     callDurationSeconds = 0;
+    _stopStatsPolling();
 
     _offerTimer?.cancel();
     _offerTimer = null;
@@ -899,6 +941,31 @@ class CallService extends ChangeNotifier {
         .getUserMedia({'audio': audio, 'video': video});
   }
 
+  String? _optimizeSdpForLowLatency(String? sdp) {
+    if (sdp == null) return null;
+    var result = sdp;
+    // Use 10ms Opus frames instead of default 20ms for lower latency
+    result = result.replaceAll(
+      'minptime=10',
+      'minptime=10;ptime=10;maxptime=20',
+    );
+    // If minptime is not present, add ptime to opus fmtp line
+    if (!result.contains('ptime=10')) {
+      result = result.replaceAllMapped(
+        RegExp(r'(a=fmtp:\d+ .*useinbandfec=1)'),
+        (m) => '${m.group(0)};ptime=10;maxptime=20',
+      );
+    }
+    // Enable DTX (discontinuous transmission) to save bandwidth during silence
+    if (!result.contains('usedtx=1')) {
+      result = result.replaceAllMapped(
+        RegExp(r'(a=fmtp:\d+ .*useinbandfec=1[^\r\n]*)'),
+        (m) => '${m.group(0)};usedtx=1',
+      );
+    }
+    return result;
+  }
+
   dynamic _defaultVideoConstraints() {
     final isMobile =
         !Platform.isWindows && !Platform.isLinux && !Platform.isMacOS;
@@ -917,6 +984,140 @@ class CallService extends ChangeNotifier {
       callDurationSeconds++;
       notifyListeners();
     });
+    _startStatsPolling();
+  }
+
+  void _startStatsPolling() {
+    _statsTimer?.cancel();
+    _prevPacketsReceived = 0;
+    _prevPacketsLost = 0;
+    _statsTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(_pollStats());
+    });
+  }
+
+  void _stopStatsPolling() {
+    _statsTimer?.cancel();
+    _statsTimer = null;
+    metrics = const CallMetrics();
+    _prevPacketsReceived = 0;
+    _prevPacketsLost = 0;
+    _videoDegraded = false;
+    _consecutivePoorCount = 0;
+  }
+
+  Future<void> _pollStats() async {
+    final pc = _pc;
+    if (pc == null || state != CallState.active) return;
+
+    try {
+      final stats = await pc.getStats();
+      double rttMs = 0;
+      double jitterMs = 0;
+      int packetsReceived = 0;
+      int packetsLost = 0;
+      double audioLevel = 0;
+
+      for (final report in stats) {
+        final values = report.values;
+
+        // RTT from active candidate pair
+        if (report.type == 'candidate-pair') {
+          final nominated = values['nominated'];
+          final pairState = values['state'];
+          if ((nominated == true || pairState == 'succeeded') &&
+              values.containsKey('currentRoundTripTime')) {
+            final rttSec = (values['currentRoundTripTime'] as num).toDouble();
+            rttMs = rttSec * 1000;
+          }
+        }
+
+        // Jitter and packet loss from inbound audio RTP
+        if (report.type == 'inbound-rtp') {
+          final kind = values['kind'] ?? values['mediaType'];
+          if (kind == 'audio') {
+            if (values.containsKey('jitter')) {
+              jitterMs = ((values['jitter'] as num).toDouble()) * 1000;
+            }
+            if (values.containsKey('packetsReceived')) {
+              packetsReceived = (values['packetsReceived'] as num).toInt();
+            }
+            if (values.containsKey('packetsLost')) {
+              packetsLost = (values['packetsLost'] as num).toInt();
+            }
+            if (values.containsKey('audioLevel')) {
+              audioLevel = (values['audioLevel'] as num).toDouble();
+            }
+          }
+        }
+      }
+
+      // Compute delta-based packet loss percentage
+      double lossPercent = 0;
+      final deltaReceived = packetsReceived - _prevPacketsReceived;
+      final deltaLost = packetsLost - _prevPacketsLost;
+      final deltaTotal = deltaReceived + deltaLost;
+      if (deltaTotal > 0) {
+        lossPercent = (deltaLost / deltaTotal) * 100;
+        if (lossPercent < 0) lossPercent = 0;
+      }
+      _prevPacketsReceived = packetsReceived;
+      _prevPacketsLost = packetsLost;
+
+      final quality = CallMetrics.computeQuality(rttMs, jitterMs, lossPercent);
+
+      metrics = CallMetrics(
+        rttMs: rttMs,
+        jitterMs: jitterMs,
+        packetLossPercent: lossPercent,
+        audioLevel: audioLevel,
+        quality: quality,
+      );
+      _adaptToNetworkQuality(quality);
+      notifyListeners();
+    } catch (e) {
+      _log('stats poll error: $e');
+    }
+  }
+
+  void _adaptToNetworkQuality(CallQuality quality) {
+    if (quality == CallQuality.poor) {
+      _consecutivePoorCount++;
+    } else {
+      // Restore video if quality recovered for 3+ cycles
+      if (_videoDegraded && _consecutivePoorCount == 0 && quality == CallQuality.good) {
+        _restoreVideo();
+      }
+      _consecutivePoorCount = 0;
+    }
+
+    // After 3 consecutive poor readings (~6 seconds), degrade video
+    if (_consecutivePoorCount >= 3 && isVideoCall && !_videoDegraded) {
+      _degradeVideo();
+    }
+  }
+
+  void _degradeVideo() {
+    if (_videoDegraded) return;
+    _videoDegraded = true;
+    _log('degrading video due to poor network');
+    // Disable video tracks to reduce bandwidth
+    for (final t in _localStream?.getVideoTracks() ?? []) {
+      t.enabled = false;
+    }
+    notifyListeners();
+  }
+
+  void _restoreVideo() {
+    if (!_videoDegraded) return;
+    _videoDegraded = false;
+    _log('restoring video after network recovery');
+    if (!isCameraOff) {
+      for (final t in _localStream?.getVideoTracks() ?? []) {
+        t.enabled = true;
+      }
+    }
+    notifyListeners();
   }
 
   bool _markSeen(String type, String callId, int seq, String fromPeer) {
