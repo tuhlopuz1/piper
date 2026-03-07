@@ -53,7 +53,9 @@ Source: "{#BuildDir}\data\*";    DestDir: "{app}\data"; Flags: ignoreversion rec
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startmenu
-Name: "{autoprograms}\Удалить {#AppName}"; Filename: "{uninstallexe}"; Tasks: startmenu
+; Always create uninstall shortcut in Start Menu so user can remove app directly from Start
+Name: "{autoprograms}\Удалить {#AppName}"; Filename: "{uninstallexe}"
+Name: "{userstartmenu}\Удалить {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
