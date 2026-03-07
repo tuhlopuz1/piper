@@ -1,3 +1,7 @@
+https://disk.yandex.ru/d/-ySkUm3ud-8yHA
+
+
+
 # Piper
 
 Decentralized LAN messenger. No internet, no servers, no cloud. Devices discover each other over Wi-Fi/BLE and communicate directly via encrypted P2P connections.
