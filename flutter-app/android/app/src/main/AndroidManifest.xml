@@ -22,14 +22,10 @@
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <!-- Android ≤ 11 needs location for BLE scan -->
+    <!-- Location permission: BLE scan (API ≤30) and WiFi Direct peer scan (API 31-32). API 33+ uses NEARBY_WIFI_DEVICES. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="30" />
-    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
-    <!-- WiFi Direct discovery — required on API 31-32 (API ≤30 covered above, API 33+ by NEARBY_WIFI_DEVICES) -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:minSdkVersion="31"
         android:maxSdkVersion="32" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <!-- Android 13+ (API 33+) replaces location permission for WiFi peer scan -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation" />
