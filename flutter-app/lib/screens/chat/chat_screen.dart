@@ -15,6 +15,7 @@ import '../call/voice_call_screen.dart';
 import '../call/video_call_screen.dart';
 import '../media/media_viewer_screen.dart';
 import '../contacts/contact_info_screen.dart';
+import '../group/group_info_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final Chat chat;
@@ -110,12 +111,6 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!svc.isRunning) return;
 
     final chatId = widget.chat.id;
-    if (widget.chat.isGroup && chatId != 'global') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Отправка файлов в группы пока не поддерживается')),
-      );
-      return;
-    }
     if (chatId == 'global') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Отправка файлов в общий чат не поддерживается')),
@@ -123,7 +118,12 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    svc.sendFile(chatId, file.path!);
+    if (widget.chat.isGroup && chatId.startsWith('group:')) {
+      final groupId = chatId.replaceFirst('group:', '');
+      svc.sendFileToGroup(groupId, file.path!);
+    } else {
+      svc.sendFile(chatId, file.path!);
+    }
   }
 
   void _startRecording() => setState(() => _isRecording = true);
@@ -195,6 +195,9 @@ class _ChatAppBar extends StatelessWidget {
   final Chat chat;
   const _ChatAppBar({required this.chat});
 
+  bool get _isNonGlobalGroup =>
+      chat.isGroup && chat.id != 'global' && chat.id.startsWith('group:');
+
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
@@ -205,7 +208,15 @@ class _ChatAppBar extends StatelessWidget {
     if (chat.id == 'global') {
       final onlineCount = svc.peers.where((p) => p.isConnected).length;
       isOnline = onlineCount > 0;
-      statusText = '${onlineCount + 1} участников';
+      statusText = '${onlineCount + 1} участник${_pluralSuffix(onlineCount + 1)}';
+    } else if (_isNonGlobalGroup) {
+      final groupId = chat.id.replaceFirst('group:', '');
+      final group = svc.groups.where((g) => g.id == groupId).firstOrNull;
+      final memberCount = group?.members.length ?? chat.memberCount;
+      isOnline = false;
+      statusText = memberCount > 0
+          ? svc.groupMembersSummary(groupId)
+          : '$memberCount участник${_pluralSuffix(memberCount)}';
     } else if (chat.isGroup) {
       isOnline = false;
       statusText = 'Группа';
@@ -230,10 +241,21 @@ class _ChatAppBar extends StatelessWidget {
           ),
           Expanded(
             child: GestureDetector(
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => ContactInfoScreen(chat: chat)),
-              ),
+              onTap: () {
+                if (_isNonGlobalGroup) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => GroupInfoScreen(chat: chat)),
+                  );
+                } else {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => ContactInfoScreen(chat: chat)),
+                  );
+                }
+              },
               child: Row(
                 children: [
                   AppAvatar(style: chat.avatarStyle, initials: chat.initials, size: 38, isGroup: chat.isGroup),
@@ -254,6 +276,7 @@ class _ChatAppBar extends StatelessWidget {
                         ),
                         Text(
                           statusText,
+                          overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.inter(
                             fontSize: 12,
                             color: isOnline ? AppColors.online : AppColors.mutedForeground,
@@ -266,33 +289,54 @@ class _ChatAppBar extends StatelessWidget {
               ),
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.phone_outlined, size: 20),
-            color: AppColors.mutedForeground,
-            onPressed: () async {
-              await CallService.instance.startCall(chat.id, chat.name, false);
-              if (!context.mounted) return;
-              if (CallService.instance.state == CallState.idle) return;
-              Navigator.push(context, MaterialPageRoute(
-                builder: (_) => const VoiceCallScreen(),
-              ));
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.videocam_outlined, size: 22),
-            color: AppColors.mutedForeground,
-            onPressed: () async {
-              await CallService.instance.startCall(chat.id, chat.name, true);
-              if (!context.mounted) return;
-              if (CallService.instance.state == CallState.idle) return;
-              Navigator.push(context, MaterialPageRoute(
-                builder: (_) => const VideoCallScreen(),
-              ));
-            },
-          ),
+          // Show call buttons only for DM chats, not groups
+          if (!chat.isGroup) ...[
+            IconButton(
+              icon: const Icon(Icons.phone_outlined, size: 20),
+              color: AppColors.mutedForeground,
+              onPressed: () async {
+                await CallService.instance.startCall(chat.id, chat.name, false);
+                if (!context.mounted) return;
+                if (CallService.instance.state == CallState.idle) return;
+                Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => const VoiceCallScreen(),
+                ));
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.videocam_outlined, size: 22),
+              color: AppColors.mutedForeground,
+              onPressed: () async {
+                await CallService.instance.startCall(chat.id, chat.name, true);
+                if (!context.mounted) return;
+                if (CallService.instance.state == CallState.idle) return;
+                Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => const VideoCallScreen(),
+                ));
+              },
+            ),
+          ] else if (_isNonGlobalGroup) ...[
+            // Group info button for group chats
+            IconButton(
+              icon: const Icon(Icons.info_outline_rounded, size: 20),
+              color: AppColors.mutedForeground,
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => GroupInfoScreen(chat: chat)),
+              ),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  String _pluralSuffix(int count) {
+    if (count % 10 == 1 && count % 100 != 11) return '';
+    if ([2, 3, 4].contains(count % 10) &&
+        ![12, 13, 14].contains(count % 100)) return 'а';
+    return 'ов';
   }
 }
 

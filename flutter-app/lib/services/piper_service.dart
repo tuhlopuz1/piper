@@ -173,6 +173,7 @@ class PiperService extends ChangeNotifier {
       return;
     }
     if (e.type == 'group') {
+      _handleGroupEvent(e);
       _refresh();
       return;
     }
@@ -304,6 +305,47 @@ class PiperService extends ChangeNotifier {
     }
   }
 
+  void _handleGroupEvent(PiperEvent e) {
+    final groupId = e.groupId;
+    if (groupId == null || groupId.isEmpty) return;
+    final chatId = 'group:$groupId';
+
+    String? systemText;
+    switch (e.groupEvent) {
+      case 'created':
+        // Persist group chat name
+        final gName = e.groupName ?? 'Группа';
+        _chatNames[chatId] = gName;
+        DatabaseService.instance.upsertChatName(chatId, gName);
+        systemText = 'Группа "$gName" создана';
+      case 'member_joined':
+        final who = e.peerName ?? e.peerId ?? 'Кто-то';
+        systemText = '$who присоединился к группе';
+      case 'member_left':
+        final who = e.peerName ?? e.peerId ?? 'Кто-то';
+        systemText = '$who покинул группу';
+      case 'deleted':
+        systemText = 'Группа удалена';
+      default:
+        return;
+    }
+
+    if (systemText != null) {
+      _messages.putIfAbsent(chatId, () => []);
+      final msg = Message(
+        id: 'sys_${DateTime.now().millisecondsSinceEpoch}',
+        isMe: false,
+        senderName: null,
+        senderColor: null,
+        type: MsgType.text,
+        text: systemText,
+        time: DateTime.now(),
+      );
+      _messages[chatId]!.add(msg);
+      DatabaseService.instance.insertMessage(chatId, msg);
+    }
+  }
+
   // ── Messaging ─────────────────────────────────────────────────────────────
 
   void sendText(String text, {String? toPeerId, String? groupId}) {
@@ -404,12 +446,72 @@ class PiperService extends ChangeNotifier {
     notifyListeners();
   }
 
+  void sendFileToGroup(String groupId, String filePath) {
+    if (_node == null) return;
+
+    final name = filePath
+        .replaceAll(r'\', '/')
+        .split('/')
+        .lastWhere((p) => p.isNotEmpty, orElse: () => 'file');
+    final ext = name.contains('.') ? name.split('.').last.toUpperCase() : null;
+
+    int? size;
+    try {
+      size = File(filePath).statSync().size;
+    } catch (_) {}
+
+    final chatId = 'group:$groupId';
+    final msgId = 'file_${DateTime.now().millisecondsSinceEpoch}';
+
+    _messages.putIfAbsent(chatId, () => []);
+    final outFileMsg = Message(
+      id: msgId,
+      isMe: true,
+      type: MsgType.file,
+      fileName: name,
+      fileExt: ext,
+      fileSize: size,
+      filePath: filePath,
+      time: DateTime.now(),
+      delivered: false,
+    );
+    _messages[chatId]!.add(outFileMsg);
+    DatabaseService.instance.insertMessage(chatId, outFileMsg);
+
+    _pendingFiles[name] = (chatId, msgId);
+
+    try {
+      _node!.sendFileToGroup(groupId, filePath);
+    } catch (e) {
+      _pendingFiles.remove(name);
+      LogService.instance.error('[PiperService] sendFileToGroup error: $e');
+    }
+
+    notifyListeners();
+  }
+
   // ── Group management ──────────────────────────────────────────────────────
 
   String createGroup(String name) => _node?.createGroup(name) ?? '';
   void inviteToGroup(String groupId, String peerId) =>
       _node?.inviteToGroup(groupId, peerId);
   void leaveGroup(String groupId) => _node?.leaveGroup(groupId);
+
+  /// Get a human-readable member summary for a group (e.g. "Вы, Alex, Maria")
+  String groupMembersSummary(String groupId) {
+    final group = _groups.where((g) => g.id == groupId).firstOrNull;
+    if (group == null) return '';
+    final names = <String>[];
+    for (final mid in group.members) {
+      if (mid == myId) {
+        names.add('Вы');
+      } else {
+        final peer = _peers.where((p) => p.id == mid).firstOrNull;
+        names.add(peer?.displayName ?? mid.substring(0, 8));
+      }
+    }
+    return names.join(', ');
+  }
 
   // ── Helpers for UI ────────────────────────────────────────────────────────
 
