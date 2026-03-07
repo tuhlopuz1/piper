@@ -15,7 +15,8 @@
       "Bash(ls \"C:/Windows/System32/downlevel/\"api-ms-win-crt-private*.dll)",
       "Bash(flutter pub get)",
       "Bash(flutter build windows --debug)",
-      "Bash(flutter build windows --release)"
+      "Bash(flutter build windows --release)",
+      "Bash(go test ./core/ -v -count=1 -timeout 60s)"
     ]
   }
 }

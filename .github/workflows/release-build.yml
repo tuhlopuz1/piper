@@ -10,8 +10,25 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+
+      - name: Run tests
+        working-directory: go
+        run: go test ./core/ -v -count=1 -timeout 60s -race
+
   linux:
     name: Linux Release
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -65,6 +82,7 @@ jobs:
 
   macos:
     name: macOS Release
+    needs: [test]
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -113,6 +131,7 @@ jobs:
 
   windows:
     name: Windows Release
+    needs: [test]
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -174,6 +193,7 @@ jobs:
 
   android:
     name: Android Release
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
