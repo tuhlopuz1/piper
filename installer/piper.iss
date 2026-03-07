@@ -53,6 +53,7 @@ Source: "{#BuildDir}\data\*";    DestDir: "{app}\data"; Flags: ignoreversion rec
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startmenu
+Name: "{autoprograms}\Удалить {#AppName}"; Filename: "{uninstallexe}"; Tasks: startmenu
 Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
