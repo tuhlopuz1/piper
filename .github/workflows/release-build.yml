@@ -1,0 +1,217 @@
+name: Release Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+
+      - name: Flutter pub get
+        working-directory: flutter-app
+        run: flutter pub get
+
+      - name: Build Linux release
+        run: |
+          flutter config --enable-linux-desktop
+          flutter build linux --release --project-dir flutter-app
+
+      - name: Build libpiper.so for Linux bundle
+        run: |
+          mkdir -p flutter-app/build/linux/x64/release/bundle/lib
+          cd go
+          CGO_ENABLED=1 go build -buildmode=c-shared \
+            -o ../flutter-app/build/linux/x64/release/bundle/lib/libpiper.so \
+            ./ffi/
+
+      - name: Package Linux artifact
+        run: |
+          mkdir -p dist
+          tar -C flutter-app/build/linux/x64/release/bundle -czf dist/piper-linux.tar.gz .
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: piper-linux
+          path: dist/piper-linux.tar.gz
+
+  macos:
+    name: macOS Release
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        working-directory: flutter-app
+        run: flutter pub get
+
+      - name: Build macOS release
+        run: |
+          flutter config --enable-macos-desktop
+          flutter build macos --release --project-dir flutter-app
+
+      - name: Build libpiper.dylib for app bundle
+        run: |
+          cd go
+          CGO_ENABLED=1 go build -buildmode=c-shared \
+            -o ../flutter-app/build/macos/Build/Products/Release/piper.app/Contents/MacOS/libpiper.dylib \
+            ./ffi/
+
+      - name: Package macOS artifact
+        run: |
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            flutter-app/build/macos/Build/Products/Release/piper.app \
+            dist/piper-macos.zip
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: piper-macos
+          path: dist/piper-macos.zip
+
+  windows:
+    name: Windows Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+
+      - name: Install MinGW (for CGO)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc
+
+      - name: Add MinGW to PATH
+        shell: pwsh
+        run: |
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        working-directory: flutter-app
+        shell: pwsh
+        run: flutter pub get
+
+      - name: Build libpiper.dll
+        shell: pwsh
+        run: |
+          cd go
+          $env:CGO_ENABLED = "1"
+          go build -buildmode=c-shared -o ..\flutter-app\windows\runner\libpiper.dll .\ffi\
+
+      - name: Build Windows release
+        shell: pwsh
+        run: |
+          flutter config --enable-windows-desktop
+          flutter build windows --release --project-dir flutter-app
+
+      - name: Package Windows artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path flutter-app\build\windows\x64\runner\Release\* -DestinationPath dist\piper-windows.zip -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: piper-windows
+          path: dist/piper-windows.zip
+
+  android:
+    name: Android Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept SDK licenses and install NDK
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "ndk;27.0.12077973"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        working-directory: flutter-app
+        run: flutter pub get
+
+      - name: Build Android native libraries
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: |
+          chmod +x go/build_android.sh
+          ./go/build_android.sh
+
+      - name: Build Android release APK
+        run: flutter build apk --release --project-dir flutter-app
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: piper-android
+          path: flutter-app/build/app/outputs/flutter-apk/app-release.apk
