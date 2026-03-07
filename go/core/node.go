@@ -413,6 +413,7 @@ func (n *Node) SendFileToGroup(groupID, filePath string) (sent int, _ error) {
 			PeerID:     n.id,
 			Name:       n.name,
 			To:         memberID,
+			GroupID:    groupID,
 			TransferID: tid,
 			FileName:   info.Name(),
 			FileSize:   info.Size(),
@@ -1136,6 +1137,7 @@ func (n *Node) handleFileOffer(msg Message, cn *conn) {
 	}
 
 	t := n.transfers.Start(msg.TransferID, msg.PeerID, msg.FileName, msg.FileSize, false)
+	t.GroupID = msg.GroupID
 	t.file = f
 	t.filePath = destPath
 
