@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
-import '../../models/message.dart';
+import '../../services/piper_service.dart';
 import '../../services/call_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../chat/chat_screen.dart';
@@ -15,14 +17,24 @@ class ContactInfoScreen extends StatelessWidget {
 
   const ContactInfoScreen({super.key, required this.chat});
 
-
-  List<Message> get _mediaMessages {
-    final msgs = getMockMessages(chat);
-    return msgs.where((m) => m.type == MsgType.image).toList();
-  }
-
   @override
   Widget build(BuildContext context) {
+    final svc = context.watch<PiperService>();
+
+    // Resolve live peer data from the service.
+    final peer = svc.peers.where((p) => p.id == chat.id).firstOrNull;
+    final isOnline = peer?.isConnected ?? chat.isOnline;
+    final displayName = peer?.displayName ?? chat.name;
+
+    // Truncated peer ID for display.
+    final shortId = chat.id.length > 16
+        ? '${chat.id.substring(0, 8)}…${chat.id.substring(chat.id.length - 8)}'
+        : chat.id;
+
+    // Shared files from real message history.
+    final chatMessages = svc.messages[chat.id] ?? [];
+    final sharedFiles = chatMessages.where((m) => m.fileName != null).toList();
+
     return Scaffold(
       backgroundColor: AppColors.bgBase,
       body: CustomScrollView(
@@ -70,9 +82,9 @@ class ContactInfoScreen extends StatelessWidget {
                   // Avatar
                   AppAvatar(
                     style: chat.avatarStyle,
-                    initials: chat.initials,
+                    initials: svc.initialsFor(displayName),
                     size: 88,
-                    isGroup: chat.isGroup,
+                    isGroup: false,
                   )
                       .animate()
                       .scale(
@@ -86,7 +98,7 @@ class ContactInfoScreen extends StatelessWidget {
                   const SizedBox(height: 14),
 
                   Text(
-                    chat.name,
+                    displayName,
                     style: GoogleFonts.inter(
                       fontSize: 24,
                       fontWeight: FontWeight.w700,
@@ -104,16 +116,16 @@ class ContactInfoScreen extends StatelessWidget {
                         width: 7,
                         height: 7,
                         decoration: BoxDecoration(
-                          color: chat.isOnline ? AppColors.online : AppColors.border,
+                          color: isOnline ? AppColors.online : AppColors.border,
                           shape: BoxShape.circle,
                         ),
                       ),
                       const SizedBox(width: 5),
                       Text(
-                        chat.isOnline ? 'В сети' : 'Не в сети',
+                        isOnline ? 'В сети' : 'Не в сети',
                         style: GoogleFonts.inter(
                           fontSize: 13,
-                          color: chat.isOnline ? AppColors.online : AppColors.mutedForeground,
+                          color: isOnline ? AppColors.online : AppColors.mutedForeground,
                         ),
                       ),
                     ],
@@ -173,37 +185,40 @@ class ContactInfoScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _InfoRow(
-                    icon: Icons.lan_outlined,
-                    label: 'IP-адрес',
-                    value: '192.168.1.12',
+                  GestureDetector(
+                    onLongPress: () {
+                      Clipboard.setData(ClipboardData(text: chat.id));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('ID скопирован')),
+                      );
+                    },
+                    child: _InfoRow(
+                      icon: Icons.fingerprint_rounded,
+                      label: 'Peer ID',
+                      value: shortId,
+                    ),
                   ),
                   const SizedBox(height: 2),
                   _InfoRow(
-                    icon: Icons.devices_outlined,
-                    label: 'Устройство',
-                    value: 'MacBook Pro',
+                    icon: Icons.circle,
+                    label: 'Статус',
+                    value: isOnline ? 'Подключён' : 'Отключён',
+                    valueColor: isOnline ? AppColors.online : AppColors.mutedForeground,
+                    iconColor: isOnline ? AppColors.online : AppColors.mutedForeground,
+                    iconSize: 10,
                   ),
-                  if (chat.isGroup) ...[
-                    const SizedBox(height: 2),
-                    _InfoRow(
-                      icon: Icons.group_outlined,
-                      label: 'Участников',
-                      value: '${chat.memberCount}',
-                    ),
-                  ],
                 ],
               ).animate(delay: 200.ms).fadeIn(duration: 380.ms),
             ),
           ),
 
-          // ── Shared media ──────────────────────────────────────────────────
-          if (_mediaMessages.isNotEmpty) ...[
+          // ── Shared files ──────────────────────────────────────────────────
+          if (sharedFiles.isNotEmpty) ...[
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
                 child: Text(
-                  'ОБЩИЕ МЕДИА',
+                  'ОБЩИЕ ФАЙЛЫ · ${sharedFiles.length}',
                   style: GoogleFonts.inter(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
@@ -213,40 +228,81 @@ class ContactInfoScreen extends StatelessWidget {
                 ),
               ),
             ),
-            SliverToBoxAdapter(
-              child: SizedBox(
-                height: 100,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  itemCount: _mediaMessages.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (_, i) {
-                    final msg = _mediaMessages[i];
-                    return ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: Container(
-                        width: 100,
-                        color: msg.imageColor ?? AppColors.primary,
-                        child: Center(
-                          child: Icon(
-                            Icons.image_outlined,
-                            color: Colors.white.withValues(alpha: 0.5),
-                            size: 28,
-                          ),
-                        ),
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (_, i) {
+                  final file = sharedFiles[i];
+                  final sizeStr = file.fileSize != null
+                      ? _formatFileSize(file.fileSize!)
+                      : '';
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppColors.bgSubtle,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.border, width: 0.5),
                       ),
-                    )
-                        .animate(delay: Duration(milliseconds: 240 + i * 60))
-                        .fadeIn(duration: 300.ms)
-                        .scale(
-                          begin: const Offset(0.85, 0.85),
-                          end: const Offset(1, 1),
-                          duration: 300.ms,
-                          curve: Curves.easeOutBack,
-                        );
-                  },
-                ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Center(
+                              child: Text(
+                                file.fileExt?.toUpperCase() ?? '?',
+                                style: GoogleFonts.inter(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.primaryLight,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  file.fileName ?? 'Файл',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: AppColors.foreground,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                if (sizeStr.isNotEmpty)
+                                  Text(
+                                    sizeStr,
+                                    style: GoogleFonts.inter(
+                                      fontSize: 11,
+                                      color: AppColors.mutedForeground,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          Icon(
+                            file.isMe ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+                            size: 16,
+                            color: AppColors.mutedForeground,
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                      .animate(delay: Duration(milliseconds: 240 + i * 40))
+                      .fadeIn(duration: 300.ms);
+                },
+                childCount: sharedFiles.length > 10 ? 10 : sharedFiles.length,
               ),
             ),
           ],
@@ -276,6 +332,12 @@ class ContactInfoScreen extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes Б';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} КБ';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} МБ';
   }
 }
 
@@ -321,8 +383,18 @@ class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
+  final Color? valueColor;
+  final Color? iconColor;
+  final double? iconSize;
 
-  const _InfoRow({required this.icon, required this.label, required this.value});
+  const _InfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.valueColor,
+    this.iconColor,
+    this.iconSize,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -335,7 +407,7 @@ class _InfoRow extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(icon, size: 17, color: AppColors.primaryLight),
+          Icon(icon, size: iconSize ?? 17, color: iconColor ?? AppColors.primaryLight),
           const SizedBox(width: 12),
           Text(
             label,
@@ -350,7 +422,7 @@ class _InfoRow extends StatelessWidget {
             style: GoogleFonts.inter(
               fontSize: 14,
               fontWeight: FontWeight.w500,
-              color: AppColors.foreground,
+              color: valueColor ?? AppColors.foreground,
             ),
           ),
         ],
