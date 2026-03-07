@@ -16,7 +16,9 @@
       "Bash(flutter pub get)",
       "Bash(flutter build windows --debug)",
       "Bash(flutter build windows --release)",
-      "Bash(go test ./core/ -v -count=1 -timeout 60s)"
+      "Bash(go test ./core/ -v -count=1 -timeout 60s)",
+      "Bash(go test ./mesh/transport/... -v)",
+      "Bash(go test ./mesh/transport/... -v -race)"
     ]
   }
 }
