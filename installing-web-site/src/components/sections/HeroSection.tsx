@@ -137,14 +137,27 @@ export function HeroSection() {
         >
           <div className="relative rounded-2xl overflow-hidden border border-white/10 shadow-2xl shadow-indigo-900/40 bg-white/5 backdrop-blur-sm">
             <img
-              src="mockup.png"
+              src="/mockup.png"
               alt="Piper App Preview"
               className="w-full object-cover"
               onError={(e) => {
                 const target = e.target as HTMLImageElement
+                const currentSrc = target.getAttribute('src') ?? ''
+
+                // Try common typo and then show bundled placeholder.
+                if (!currentSrc.endsWith('/mochup.png') && !currentSrc.endsWith('mochup.png')) {
+                  target.setAttribute('src', '/mochup.png')
+                  return
+                }
+
+                if (!currentSrc.endsWith('/mockup.svg') && !currentSrc.endsWith('mockup.svg')) {
+                  target.setAttribute('src', '/mockup.svg')
+                  return
+                }
+
                 target.style.display = 'none'
                 const parent = target.parentElement!
-                parent.innerHTML = `<div class="flex items-center justify-center h-64 text-white/20 text-sm gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>Добавьте mockup.png в папку public/</div>`
+                parent.innerHTML = `<div class="flex items-center justify-center h-64 text-white/20 text-sm gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>Добавьте mockup.png или mochup.png в папку public/</div>`
               }}
             />
           </div>
