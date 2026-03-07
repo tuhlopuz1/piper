@@ -69,16 +69,32 @@ jobs:
             -o ../flutter-app/build/linux/x64/release/bundle/lib/libpiper.so \
             ./ffi/
 
-      - name: Package Linux artifact
+      - name: Package Linux installer (.deb)
         run: |
           mkdir -p dist
-          tar -C flutter-app/build/linux/x64/release/bundle -czf dist/piper-linux.tar.gz .
+          mkdir -p package/deb/DEBIAN package/deb/opt/piper package/deb/usr/bin
+          cp -R flutter-app/build/linux/x64/release/bundle/* package/deb/opt/piper/
+          cat > package/deb/DEBIAN/control << 'EOF'
+          Package: piper
+          Version: 1.0.0
+          Section: net
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Piper Team
+          Description: Piper desktop client
+          EOF
+          cat > package/deb/usr/bin/piper << 'EOF'
+          #!/usr/bin/env bash
+          exec /opt/piper/piper "$@"
+          EOF
+          chmod +x package/deb/usr/bin/piper
+          dpkg-deb --build package/deb dist/piper-linux-amd64.deb
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: piper-linux
-          path: dist/piper-linux.tar.gz
+          path: dist/piper-linux-amd64.deb
 
   macos:
     name: macOS Release
@@ -116,18 +132,20 @@ jobs:
             -o ../flutter-app/build/macos/Build/Products/Release/piper.app/Contents/MacOS/libpiper.dylib \
             ./ffi/
 
-      - name: Package macOS artifact
+      - name: Package macOS installer (.dmg)
         run: |
           mkdir -p dist
-          ditto -c -k --sequesterRsrc --keepParent \
-            flutter-app/build/macos/Build/Products/Release/piper.app \
-            dist/piper-macos.zip
+          hdiutil create \
+            -volname "Piper" \
+            -srcfolder flutter-app/build/macos/Build/Products/Release/piper.app \
+            -ov -format UDZO \
+            dist/piper-macos.dmg
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: piper-macos
-          path: dist/piper-macos.zip
+          path: dist/piper-macos.dmg
 
   windows:
     name: Windows Release
@@ -179,17 +197,20 @@ jobs:
           flutter config --enable-windows-desktop
           flutter build windows --release
 
-      - name: Package Windows artifact
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Package Windows installer (.exe)
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path flutter-app\build\windows\x64\runner\Release\* -DestinationPath dist\piper-windows.zip -Force
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\piper.iss
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: piper-windows
-          path: dist/piper-windows.zip
+          path: dist/piper-setup.exe
 
   android:
     name: Android Release
@@ -319,7 +340,7 @@ jobs:
       - name: Flatten artifact files
         run: |
           mkdir -p release-assets
-          find dist -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.apk" \) -exec cp {} release-assets/ \;
+          find dist -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.deb" -o -name "*.apk" \) -exec cp {} release-assets/ \;
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -328,8 +349,8 @@ jobs:
           name: ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
           files: |
-            release-assets/piper-linux.tar.gz
-            release-assets/piper-macos.zip
-            release-assets/piper-windows.zip
+            release-assets/piper-linux-amd64.deb
+            release-assets/piper-macos.dmg
+            release-assets/piper-setup.exe
             release-assets/app-release.apk
           generate_release_notes: true
