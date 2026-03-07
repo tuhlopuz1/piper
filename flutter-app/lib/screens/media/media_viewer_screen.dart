@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'dart:io';
 
 class MediaViewerScreen extends StatefulWidget {
+  final String? imagePath;
   final Color color;
-  const MediaViewerScreen({super.key, required this.color});
+  const MediaViewerScreen({
+    super.key,
+    this.imagePath,
+    this.color = Colors.black,
+  });
 
   @override
   State<MediaViewerScreen> createState() => _MediaViewerScreenState();
@@ -42,18 +48,37 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
               transformationController: _transformCtrl,
               minScale: 0.5,
               maxScale: 5.0,
-              child: Container(
-                width: double.infinity,
-                height: double.infinity,
-                color: widget.color,
-                child: Center(
-                  child: Icon(
-                    Icons.image_outlined,
-                    size: 80,
-                    color: Colors.white.withValues(alpha: 0.3),
-                  ),
-                ),
-              ),
+              child: (widget.imagePath != null && widget.imagePath!.isNotEmpty)
+                  ? Image.file(
+                      File(widget.imagePath!),
+                      width: double.infinity,
+                      height: double.infinity,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: double.infinity,
+                        height: double.infinity,
+                        color: widget.color,
+                        child: Center(
+                          child: Icon(
+                            Icons.broken_image_outlined,
+                            size: 80,
+                            color: Colors.white.withValues(alpha: 0.3),
+                          ),
+                        ),
+                      ),
+                    )
+                  : Container(
+                      width: double.infinity,
+                      height: double.infinity,
+                      color: widget.color,
+                      child: Center(
+                        child: Icon(
+                          Icons.image_outlined,
+                          size: 80,
+                          color: Colors.white.withValues(alpha: 0.3),
+                        ),
+                      ),
+                    ),
             ),
           ),
 

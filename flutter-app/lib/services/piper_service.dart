@@ -26,6 +26,16 @@ class PiperService extends ChangeNotifier {
     'opus',
     'webm',
   ];
+  static const List<String> _imageExts = [
+    'jpg',
+    'jpeg',
+    'png',
+    'gif',
+    'webp',
+    'bmp',
+    'heic',
+    'heif',
+  ];
 
   PiperNode? _node;
   StreamSubscription<PiperEvent>? _sub;
@@ -286,8 +296,6 @@ class PiperService extends ChangeNotifier {
       }
     } else {
       // ── Incoming transfer ──────────────────────────────────────────────────
-      if (e.transferKind != 'completed') return;
-      if (tid.isEmpty || !_processedIncomingTransfers.add(tid)) return;
       final chatId = e.groupId?.isNotEmpty == true
           ? 'group:${e.groupId}'
           : (e.peerId ?? '');
@@ -296,31 +304,92 @@ class PiperService extends ChangeNotifier {
       final filePath = e.fileName != null
           ? '$_downloadsDir${Platform.pathSeparator}${e.fileName}'
           : null;
-
-      _messages.putIfAbsent(chatId, () => []);
       final isVoice = _isVoiceFileName(e.fileName);
-      final fileMsg = Message(
-        id: e.transferId ?? '${DateTime.now().millisecondsSinceEpoch}',
-        isMe: false,
-        senderName: e.peerName,
-        senderColor: colorForPeer(e.peerId ?? ''),
-        type: isVoice ? MsgType.voice : MsgType.file,
-        fileName: e.fileName,
-        fileExt: e.fileName?.split('.').last.toUpperCase(),
-        fileSize: e.fileSize,
-        filePath: filePath,
-        voiceDuration: isVoice ? _durationFromVoiceName(e.fileName) : null,
-        time: DateTime.now(),
-      );
-      _messages[chatId]!.add(fileMsg);
+      final isImage = _isImageFileName(e.fileName);
+      final progress = (e.fileSize ?? 0) > 0 ? (e.progress ?? 0) / e.fileSize! : 0.0;
 
-      // Persist and track unread.
-      DatabaseService.instance.insertMessage(chatId, fileMsg);
-      if (currentChatId != chatId) {
-        _unreadCounts[chatId] = (_unreadCounts[chatId] ?? 0) + 1;
-        DatabaseService.instance.incrementUnread(chatId);
+      switch (e.transferKind) {
+        case 'offered':
+        case 'progress':
+          if (!isImage || tid.isEmpty) return;
+          _messages.putIfAbsent(chatId, () => []);
+          final existingIdx = _messages[chatId]!.indexWhere((m) => m.id == tid);
+          final imageMsg = Message(
+            id: tid,
+            isMe: false,
+            senderName: e.peerName,
+            senderColor: colorForPeer(e.peerId ?? ''),
+            type: MsgType.image,
+            fileName: e.fileName,
+            fileExt: e.fileName?.split('.').last.toUpperCase(),
+            fileSize: e.fileSize,
+            filePath: filePath,
+            time: existingIdx >= 0 ? _messages[chatId]![existingIdx].time : DateTime.now(),
+          );
+
+          final isNew = existingIdx < 0;
+          if (isNew) {
+            _messages[chatId]!.add(imageMsg);
+          } else {
+            _messages[chatId]![existingIdx] = imageMsg;
+          }
+
+          _progressByMsgId[tid] = progress.clamp(0.0, 1.0);
+
+          // Persist and track unread only when we first show the incoming bubble.
+          if (isNew) {
+            DatabaseService.instance.insertMessage(chatId, imageMsg);
+            if (currentChatId != chatId) {
+              _unreadCounts[chatId] = (_unreadCounts[chatId] ?? 0) + 1;
+              DatabaseService.instance.incrementUnread(chatId);
+            }
+          }
+          notifyListeners();
+
+        case 'completed':
+          if (tid.isEmpty || !_processedIncomingTransfers.add(tid)) return;
+          _messages.putIfAbsent(chatId, () => []);
+          final msgId = tid.isNotEmpty ? tid : '${DateTime.now().millisecondsSinceEpoch}';
+          final existingIdx = _messages[chatId]!.indexWhere((m) => m.id == msgId);
+          final fileMsg = Message(
+            id: msgId,
+            isMe: false,
+            senderName: e.peerName,
+            senderColor: colorForPeer(e.peerId ?? ''),
+            type: isVoice
+                ? MsgType.voice
+                : (isImage ? MsgType.image : MsgType.file),
+            fileName: e.fileName,
+            fileExt: e.fileName?.split('.').last.toUpperCase(),
+            fileSize: e.fileSize,
+            filePath: filePath,
+            voiceDuration: isVoice ? _durationFromVoiceName(e.fileName) : null,
+            time: existingIdx >= 0 ? _messages[chatId]![existingIdx].time : DateTime.now(),
+          );
+
+          if (existingIdx >= 0) {
+            _messages[chatId]![existingIdx] = fileMsg;
+            DatabaseService.instance.insertMessage(chatId, fileMsg);
+          } else {
+            _messages[chatId]!.add(fileMsg);
+            // Persist and track unread.
+            DatabaseService.instance.insertMessage(chatId, fileMsg);
+            if (currentChatId != chatId) {
+              _unreadCounts[chatId] = (_unreadCounts[chatId] ?? 0) + 1;
+              DatabaseService.instance.incrementUnread(chatId);
+            }
+          }
+
+          _progressByMsgId.remove(msgId);
+          notifyListeners();
+
+        case 'failed':
+          if (tid.isNotEmpty) _progressByMsgId.remove(tid);
+          notifyListeners();
+
+        default:
+          return;
       }
-      notifyListeners();
     }
   }
 
@@ -417,6 +486,7 @@ class PiperService extends ChangeNotifier {
         .split('/')
         .lastWhere((p) => p.isNotEmpty, orElse: () => 'file');
     final ext = name.contains('.') ? name.split('.').last.toUpperCase() : null;
+    final isImage = _isImageFileName(name);
 
     int? size;
     try {
@@ -439,7 +509,7 @@ class PiperService extends ChangeNotifier {
     final outFileMsg = Message(
       id: msgId,
       isMe: true,
-      type: MsgType.file,
+      type: isImage ? MsgType.image : MsgType.file,
       fileName: name,
       fileExt: ext,
       fileSize: size,
@@ -471,6 +541,7 @@ class PiperService extends ChangeNotifier {
         .split('/')
         .lastWhere((p) => p.isNotEmpty, orElse: () => 'file');
     final ext = name.contains('.') ? name.split('.').last.toUpperCase() : null;
+    final isImage = _isImageFileName(name);
 
     int? size;
     try {
@@ -484,7 +555,7 @@ class PiperService extends ChangeNotifier {
     final outFileMsg = Message(
       id: msgId,
       isMe: true,
-      type: MsgType.file,
+      type: isImage ? MsgType.image : MsgType.file,
       fileName: name,
       fileExt: ext,
       fileSize: size,
@@ -752,6 +823,14 @@ class PiperService extends ChangeNotifier {
     if (dot <= 0 || dot == fileName.length - 1) return false;
     final ext = fileName.substring(dot + 1).toLowerCase();
     return _voiceExts.contains(ext);
+  }
+
+  bool _isImageFileName(String? fileName) {
+    if (fileName == null || fileName.isEmpty) return false;
+    final dot = fileName.lastIndexOf('.');
+    if (dot <= 0 || dot == fileName.length - 1) return false;
+    final ext = fileName.substring(dot + 1).toLowerCase();
+    return _imageExts.contains(ext);
   }
 
   String _voiceFileName(String filePath, int durationSec) {
