@@ -12,7 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/catsi/piper/core"
-	"github.com/catsi/piper/mesh/proxy"
+	"github.com/catsi/piper/mesh"
 )
 
 // ─── Handle registry ─────────────────────────────────────────────────────────
@@ -27,16 +27,10 @@ var (
 )
 
 type nodeEntry struct {
-	node     *core.Node
-	proxyMgr *proxy.ProxyManager
+	node     *mesh.Node
 	cb       C.EventCallback
 	stopPump chan struct{}
 }
-
-// noopRouter satisfies proxy.Router with no-op forwarding until mesh routing is wired.
-type noopRouter struct{}
-
-func (noopRouter) Send(peerID string, payload []byte, bufPtr *[]byte) {}
 
 // ─── JSON types for events ───────────────────────────────────────────────────
 
@@ -88,11 +82,8 @@ type ffiGroup struct {
 
 //export PiperCreateNode
 func PiperCreateNode(name *C.char, nodeID *C.char) C.int {
-	n := core.NewNodeWithID(C.GoString(name), C.GoString(nodeID))
-	entry := &nodeEntry{
-		node:     n,
-		proxyMgr: proxy.NewProxyManager(noopRouter{}),
-	}
+	n := mesh.NewNodeWithID(C.GoString(name), C.GoString(nodeID))
+	entry := &nodeEntry{node: n}
 	handleMu.Lock()
 	h := nextHandle
 	nextHandle++
@@ -405,7 +396,7 @@ func PiperOpenProxy(handle C.int, peerID, remoteIcePwd *C.char) C.int {
 	if e == nil {
 		return -1
 	}
-	port, err := e.proxyMgr.OpenProxy(C.GoString(peerID), C.GoString(remoteIcePwd))
+	port, err := e.node.OpenProxy(C.GoString(peerID), C.GoString(remoteIcePwd))
 	if err != nil {
 		return -1
 	}
@@ -420,7 +411,7 @@ func PiperCloseProxy(handle C.int, peerID *C.char) {
 	if e == nil {
 		return
 	}
-	e.proxyMgr.CloseProxy(C.GoString(peerID))
+	e.node.CloseProxy(C.GoString(peerID))
 }
 
 // PiperMeshDiag returns a JSON snapshot of mesh diagnostic info.
@@ -433,6 +424,19 @@ func PiperMeshDiag(handle C.int) *C.char {
 		return C.CString("{}")
 	}
 	data, _ := json.Marshal(map[string]string{"status": "ok"})
+	return C.CString(string(data))
+}
+
+// PiperDHTDiag returns a JSON snapshot of the DHT subsystem (peer count,
+// listening addresses, etc.). Caller MUST call PiperFreeString() after use.
+//
+//export PiperDHTDiag
+func PiperDHTDiag(handle C.int) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString("{}")
+	}
+	data, _ := json.Marshal(e.node.DHTDiag())
 	return C.CString(string(data))
 }
 

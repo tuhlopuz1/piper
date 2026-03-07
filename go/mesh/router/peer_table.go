@@ -30,6 +30,10 @@ type MeshPeer struct {
 	Links    []LinkEntry `msgpack:"l"`
 	Version  uint64      `msgpack:"v"` // only incremented by the owner
 	LastSeen time.Time   `msgpack:"t"`
+
+	// Identity public keys (omitempty so older peers without them still gossip).
+	IdentityX25519Pub  []byte `msgpack:"ix,omitempty"`
+	IdentityEd25519Pub []byte `msgpack:"ie,omitempty"`
 }
 
 type PeerTable struct {
