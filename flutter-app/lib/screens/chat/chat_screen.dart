@@ -110,6 +110,46 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _sendEmojiSticker(String emoji) {
+    final sticker = emoji.trim();
+    if (!isStickerEmoji(sticker)) return;
+
+    final svc = context.read<PiperService>();
+    if (svc.isRunning) {
+      if (widget.chat.id == 'global') {
+        svc.sendText(sticker);
+      } else if (widget.chat.isGroup) {
+        final groupId = widget.chat.id.replaceFirst('group:', '');
+        svc.sendText(sticker, groupId: groupId);
+      } else {
+        svc.sendText(sticker, toPeerId: widget.chat.id);
+      }
+      setState(() => _showAttach = false);
+    } else {
+      setState(() {
+        _messages.add(Message(
+          id: 'emoji_${DateTime.now().millisecondsSinceEpoch}',
+          isMe: true,
+          type: MsgType.emoji,
+          text: sticker,
+          time: DateTime.now(),
+          delivered: false,
+        ));
+        _showAttach = false;
+      });
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollCtrl.hasClients) {
+        _scrollCtrl.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    });
+  }
+
   Future<void> _pickAndSendFile({bool imageOnly = false}) async {
     setState(() => _showAttach = false);
     final result = await FilePicker.platform.pickFiles(
@@ -125,7 +165,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final chatId = widget.chat.id;
     if (chatId == 'global') {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Отправка файлов в общий чат не поддерживается')),
+        const SnackBar(
+            content: Text('Отправка файлов в общий чат не поддерживается')),
       );
       return;
     }
@@ -145,7 +186,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!svc.isRunning) return;
     if (widget.chat.id == 'global') {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Голосовые сообщения в общем чате не поддерживаются')),
+        const SnackBar(
+            content:
+                Text('Голосовые сообщения в общем чате не поддерживаются')),
       );
       return;
     }
@@ -248,7 +291,8 @@ class _ChatScreenState extends State<ChatScreen> {
           type: MsgType.voice,
           voiceDuration: duration,
           filePath: path,
-          fileName: 'voice_${DateTime.now().millisecondsSinceEpoch}_${duration}s.m4a',
+          fileName:
+              'voice_${DateTime.now().millisecondsSinceEpoch}_${duration}s.m4a',
           time: DateTime.now(),
           delivered: false,
         ));
@@ -259,9 +303,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final svc = context.watch<PiperService>();
-    final displayMessages = svc.isRunning
-        ? (svc.messages[widget.chat.id] ?? [])
-        : _messages;
+    final displayMessages =
+        svc.isRunning ? (svc.messages[widget.chat.id] ?? []) : _messages;
 
     return Scaffold(
       backgroundColor: AppColors.bgBase,
@@ -286,6 +329,7 @@ class _ChatScreenState extends State<ChatScreen> {
               controller: _textCtrl,
               showAttach: _showAttach,
               onAttachToggle: () => setState(() => _showAttach = !_showAttach),
+              onEmojiTap: _sendEmojiSticker,
               onSend: _sendText,
               onMicStart: _startRecording,
             ),
@@ -320,7 +364,8 @@ class _ChatAppBar extends StatelessWidget {
     if (chat.id == 'global') {
       final onlineCount = svc.peers.where((p) => p.isConnected).length;
       isOnline = onlineCount > 0;
-      statusText = '${onlineCount + 1} участник${_pluralSuffix(onlineCount + 1)}';
+      statusText =
+          '${onlineCount + 1} участник${_pluralSuffix(onlineCount + 1)}';
     } else if (_isNonGlobalGroup) {
       final groupId = chat.id.replaceFirst('group:', '');
       final group = svc.groups.where((g) => g.id == groupId).firstOrNull;
@@ -370,7 +415,11 @@ class _ChatAppBar extends StatelessWidget {
               },
               child: Row(
                 children: [
-                  AppAvatar(style: chat.avatarStyle, initials: chat.initials, size: 38, isGroup: chat.isGroup),
+                  AppAvatar(
+                      style: chat.avatarStyle,
+                      initials: chat.initials,
+                      size: 38,
+                      isGroup: chat.isGroup),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
@@ -391,7 +440,9 @@ class _ChatAppBar extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.inter(
                             fontSize: 12,
-                            color: isOnline ? AppColors.online : AppColors.mutedForeground,
+                            color: isOnline
+                                ? AppColors.online
+                                : AppColors.mutedForeground,
                           ),
                         ),
                       ],
@@ -410,9 +461,11 @@ class _ChatAppBar extends StatelessWidget {
                 await CallService.instance.startCall(chat.id, chat.name, false);
                 if (!context.mounted) return;
                 if (CallService.instance.state == CallState.idle) return;
-                Navigator.push(context, MaterialPageRoute(
-                  builder: (_) => const VoiceCallScreen(),
-                ));
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const VoiceCallScreen(),
+                    ));
               },
             ),
             IconButton(
@@ -422,9 +475,11 @@ class _ChatAppBar extends StatelessWidget {
                 await CallService.instance.startCall(chat.id, chat.name, true);
                 if (!context.mounted) return;
                 if (CallService.instance.state == CallState.idle) return;
-                Navigator.push(context, MaterialPageRoute(
-                  builder: (_) => const VideoCallScreen(),
-                ));
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const VideoCallScreen(),
+                    ));
               },
             ),
           ] else if (_isNonGlobalGroup) ...[
@@ -434,8 +489,7 @@ class _ChatAppBar extends StatelessWidget {
               color: AppColors.mutedForeground,
               onPressed: () => Navigator.push(
                 context,
-                MaterialPageRoute(
-                    builder: (_) => GroupInfoScreen(chat: chat)),
+                MaterialPageRoute(builder: (_) => GroupInfoScreen(chat: chat)),
               ),
             ),
           ],
@@ -448,8 +502,7 @@ class _ChatAppBar extends StatelessWidget {
     if (count % 10 == 1 && count % 100 != 11) {
       return '';
     }
-    if ([2, 3, 4].contains(count % 10) &&
-        ![12, 13, 14].contains(count % 100)) {
+    if ([2, 3, 4].contains(count % 10) && ![12, 13, 14].contains(count % 100)) {
       return 'а';
     }
     return 'ов';
@@ -513,7 +566,7 @@ class _DateDivider extends StatelessWidget {
     final d = DateTime(date.year, date.month, date.day);
     if (d == today) return 'Сегодня';
     if (d == today.subtract(const Duration(days: 1))) return 'Вчера';
-    return '${date.day}.${date.month.toString().padLeft(2,'0')}.${date.year}';
+    return '${date.day}.${date.month.toString().padLeft(2, '0')}.${date.year}';
   }
 
   @override
@@ -527,7 +580,8 @@ class _DateDivider extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Text(
               _label(),
-              style: GoogleFonts.inter(fontSize: 11, color: AppColors.mutedForeground),
+              style: GoogleFonts.inter(
+                  fontSize: 11, color: AppColors.mutedForeground),
             ),
           ),
           Expanded(child: Divider(color: AppColors.border, thickness: 0.5)),
@@ -558,7 +612,8 @@ class _MessageBubble extends StatelessWidget {
         right: isMe ? 0 : 48,
       ),
       child: Row(
-        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment:
+            isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!isMe && chat.isGroup) ...[
@@ -573,7 +628,8 @@ class _MessageBubble extends StatelessWidget {
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: maxBubbleW),
               child: Column(
-                crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                crossAxisAlignment:
+                    isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                 children: [
                   if (!isMe && chat.isGroup && message.senderName != null)
                     Padding(
@@ -626,7 +682,10 @@ class _BubbleContent extends StatelessWidget {
     final progress = context.read<PiperService>().progressByMsgId[message.id];
     switch (message.type) {
       case MsgType.text:
-        content = _TextContent(message: message, bg: bg, fg: fg, radius: radius);
+        content =
+            _TextContent(message: message, bg: bg, fg: fg, radius: radius);
+      case MsgType.emoji:
+        content = _EmojiContent(message: message);
       case MsgType.image:
         content = _ImageContent(
           message: message,
@@ -634,7 +693,12 @@ class _BubbleContent extends StatelessWidget {
           transferProgress: progress,
         );
       case MsgType.file:
-        content = _FileContent(message: message, bg: bg, fg: fg, radius: radius, transferProgress: progress);
+        content = _FileContent(
+            message: message,
+            bg: bg,
+            fg: fg,
+            radius: radius,
+            transferProgress: progress);
       case MsgType.voice:
         content = _VoiceContent(
           message: message,
@@ -653,7 +717,11 @@ class _TextContent extends StatelessWidget {
   final Message message;
   final Color bg, fg;
   final BorderRadius radius;
-  const _TextContent({required this.message, required this.bg, required this.fg, required this.radius});
+  const _TextContent(
+      {required this.message,
+      required this.bg,
+      required this.fg,
+      required this.radius});
 
   @override
   Widget build(BuildContext context) {
@@ -663,9 +731,39 @@ class _TextContent extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Text(message.text ?? '', style: GoogleFonts.inter(fontSize: 14, color: fg, height: 1.4)),
+          Text(message.text ?? '',
+              style: GoogleFonts.inter(fontSize: 14, color: fg, height: 1.4)),
           const SizedBox(height: 3),
           _TimeRow(message: message, fg: fg.withValues(alpha: 0.65)),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmojiContent extends StatelessWidget {
+  final Message message;
+  const _EmojiContent({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final isMe = message.isMe;
+    final color = isMe ? Colors.white : AppColors.foreground;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            message.text ?? '',
+            style: GoogleFonts.inter(fontSize: 54, height: 1),
+          ),
+          const SizedBox(height: 2),
+          _TimeRow(message: message, fg: color.withValues(alpha: 0.6)),
         ],
       ),
     );
@@ -793,7 +891,8 @@ class _FileContent extends StatelessWidget {
   final Message message;
   final Color bg, fg;
   final BorderRadius radius;
-  final double? transferProgress; // null = not transferring, 0.0-1.0 = in progress
+  final double?
+      transferProgress; // null = not transferring, 0.0-1.0 = in progress
 
   const _FileContent({
     required this.message,
@@ -874,10 +973,13 @@ class _FileContent extends StatelessWidget {
                           if (message.fileSize != null)
                             Text(
                               _formatSize(message.fileSize!),
-                              style: GoogleFonts.inter(fontSize: 11, color: fg.withValues(alpha: 0.6)),
+                              style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  color: fg.withValues(alpha: 0.6)),
                             ),
                           const Spacer(),
-                          _TimeRow(message: message, fg: fg.withValues(alpha: 0.6)),
+                          _TimeRow(
+                              message: message, fg: fg.withValues(alpha: 0.6)),
                         ],
                       ),
                     ],
@@ -901,7 +1003,8 @@ class _FileContent extends StatelessWidget {
                 alignment: Alignment.centerRight,
                 child: Text(
                   '${((transferProgress!) * 100).toStringAsFixed(0)}%',
-                  style: GoogleFonts.inter(fontSize: 10, color: fg.withValues(alpha: 0.55)),
+                  style: GoogleFonts.inter(
+                      fontSize: 10, color: fg.withValues(alpha: 0.55)),
                 ),
               ),
             ],
@@ -935,7 +1038,8 @@ class _VoiceContentState extends State<_VoiceContent> {
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
 
-  String _fmt(int s) => '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+  String _fmt(int s) =>
+      '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
 
   @override
   void initState() {
@@ -982,8 +1086,9 @@ class _VoiceContentState extends State<_VoiceContent> {
   @override
   Widget build(BuildContext context) {
     final hasFile = (widget.message.filePath?.isNotEmpty ?? false);
-    final totalSeconds =
-        _duration.inSeconds > 0 ? _duration.inSeconds : (widget.message.voiceDuration ?? 0);
+    final totalSeconds = _duration.inSeconds > 0
+        ? _duration.inSeconds
+        : (widget.message.voiceDuration ?? 0);
     final maxMs = _duration.inMilliseconds > 0
         ? _duration.inMilliseconds.toDouble()
         : ((widget.message.voiceDuration ?? 1) * 1000).toDouble();
@@ -1017,7 +1122,9 @@ class _VoiceContentState extends State<_VoiceContent> {
                     )
                   : Icon(
                       _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                      color: hasFile ? widget.fg : widget.fg.withValues(alpha: 0.5),
+                      color: hasFile
+                          ? widget.fg
+                          : widget.fg.withValues(alpha: 0.5),
                       size: 20,
                     ),
             ),
@@ -1030,7 +1137,8 @@ class _VoiceContentState extends State<_VoiceContent> {
                 SliderTheme(
                   data: SliderThemeData(
                     trackHeight: 2,
-                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                    thumbShape:
+                        const RoundSliderThumbShape(enabledThumbRadius: 5),
                     overlayShape: SliderComponentShape.noOverlay,
                     activeTrackColor: widget.fg,
                     inactiveTrackColor: widget.fg.withValues(alpha: 0.25),
@@ -1038,11 +1146,13 @@ class _VoiceContentState extends State<_VoiceContent> {
                   ),
                   child: Slider(
                     value: sliderValue,
-                    onChanged: (widget.transferProgress != null || _duration.inMilliseconds <= 0)
+                    onChanged: (widget.transferProgress != null ||
+                            _duration.inMilliseconds <= 0)
                         ? null
                         : (v) => _player.seek(
                               Duration(
-                                milliseconds: (_duration.inMilliseconds * v).round(),
+                                milliseconds:
+                                    (_duration.inMilliseconds * v).round(),
                               ),
                             ),
                   ),
@@ -1051,10 +1161,14 @@ class _VoiceContentState extends State<_VoiceContent> {
                   children: [
                     Text(
                       _fmt(totalSeconds),
-                      style: GoogleFonts.inter(fontSize: 11, color: widget.fg.withValues(alpha: 0.6)),
+                      style: GoogleFonts.inter(
+                          fontSize: 11,
+                          color: widget.fg.withValues(alpha: 0.6)),
                     ),
                     const Spacer(),
-                    _TimeRow(message: widget.message, fg: widget.fg.withValues(alpha: 0.6)),
+                    _TimeRow(
+                        message: widget.message,
+                        fg: widget.fg.withValues(alpha: 0.6)),
                   ],
                 ),
               ],
@@ -1101,6 +1215,7 @@ class _InputBar extends StatefulWidget {
   final TextEditingController controller;
   final bool showAttach;
   final VoidCallback onAttachToggle;
+  final ValueChanged<String> onEmojiTap;
   final VoidCallback onSend;
   final VoidCallback onMicStart;
 
@@ -1108,6 +1223,7 @@ class _InputBar extends StatefulWidget {
     required this.controller,
     required this.showAttach,
     required this.onAttachToggle,
+    required this.onEmojiTap,
     required this.onSend,
     required this.onMicStart,
   });
@@ -1142,7 +1258,8 @@ class _InputBarState extends State<_InputBar> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.fromLTRB(8, 8, 8, MediaQuery.of(context).padding.bottom + 8),
+      padding: EdgeInsets.fromLTRB(
+          8, 8, 8, MediaQuery.of(context).padding.bottom + 8),
       decoration: BoxDecoration(
         color: AppColors.bgSubtle,
         border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
@@ -1158,6 +1275,33 @@ class _InputBarState extends State<_InputBar> {
             color: AppColors.mutedForeground,
             onPressed: widget.onAttachToggle,
           ),
+          PopupMenuButton<String>(
+            tooltip: 'Эмодзи-стикер',
+            color: AppColors.bgSubtle,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            onSelected: widget.onEmojiTap,
+            itemBuilder: (context) => kStickerEmojis
+                .map(
+                  (emoji) => PopupMenuItem<String>(
+                    value: emoji,
+                    child: Text(
+                      emoji,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 26),
+                    ),
+                  ),
+                )
+                .toList(),
+            child: Padding(
+              padding: EdgeInsets.all(8),
+              child: Icon(
+                Icons.emoji_emotions_outlined,
+                color: AppColors.mutedForeground,
+                size: 24,
+              ),
+            ),
+          ),
           Expanded(
             child: Container(
               constraints: const BoxConstraints(maxHeight: 120),
@@ -1169,12 +1313,15 @@ class _InputBarState extends State<_InputBar> {
               child: TextField(
                 controller: widget.controller,
                 focusNode: _focusNode,
-                style: GoogleFonts.inter(fontSize: 14, color: AppColors.foreground),
+                style: GoogleFonts.inter(
+                    fontSize: 14, color: AppColors.foreground),
                 maxLines: null,
                 decoration: InputDecoration(
                   hintText: 'Сообщение...',
-                  hintStyle: GoogleFonts.inter(fontSize: 14, color: AppColors.mutedForeground),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  hintStyle: GoogleFonts.inter(
+                      fontSize: 14, color: AppColors.mutedForeground),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   border: InputBorder.none,
                 ),
               ),
@@ -1195,7 +1342,9 @@ class _InputBarState extends State<_InputBar> {
                     gradient: hasText ? AppColors.primaryGradient : null,
                     color: hasText ? null : AppColors.bgBase,
                     shape: BoxShape.circle,
-                    border: hasText ? null : Border.all(color: AppColors.border, width: 0.5),
+                    border: hasText
+                        ? null
+                        : Border.all(color: AppColors.border, width: 0.5),
                   ),
                   child: Icon(
                     hasText ? Icons.send_rounded : Icons.mic_none_rounded,
@@ -1228,14 +1377,15 @@ class _AttachPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = [
-      (Icons.image_outlined,    'Фото',       onPhotoPick),
-      (Icons.folder_outlined,   'Файл',       onFilePick),
-      (Icons.camera_alt_outlined, 'Камера',   null),
+      (Icons.image_outlined, 'Фото', onPhotoPick),
+      (Icons.folder_outlined, 'Файл', onFilePick),
+      (Icons.camera_alt_outlined, 'Камера', null),
       (Icons.location_on_outlined, 'Геопозиция', null),
     ];
 
     return Container(
-      padding: EdgeInsets.fromLTRB(20, 16, 20, MediaQuery.of(context).padding.bottom + 16),
+      padding: EdgeInsets.fromLTRB(
+          20, 16, 20, MediaQuery.of(context).padding.bottom + 16),
       decoration: BoxDecoration(
         color: AppColors.bgSubtle,
         border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
@@ -1248,7 +1398,11 @@ class _AttachPanel extends StatelessWidget {
           return _AttachItem(icon: icon, label: label, onTap: onTap)
               .animate(delay: Duration(milliseconds: i * 40))
               .fadeIn(duration: 200.ms)
-              .scale(begin: const Offset(0.7, 0.7), end: const Offset(1, 1), duration: 200.ms, curve: Curves.easeOutBack);
+              .scale(
+                  begin: const Offset(0.7, 0.7),
+                  end: const Offset(1, 1),
+                  duration: 200.ms,
+                  curve: Curves.easeOutBack);
         }).toList(),
       ),
     );
@@ -1276,14 +1430,17 @@ class _AttachItem extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.primary.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.primary.withValues(alpha: 0.2), width: 0.5),
+                border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.2),
+                    width: 0.5),
               ),
               child: Icon(icon, color: AppColors.primaryLight, size: 24),
             ),
             const SizedBox(height: 6),
             Text(
               label,
-              style: GoogleFonts.inter(fontSize: 11, color: AppColors.mutedForeground),
+              style: GoogleFonts.inter(
+                  fontSize: 11, color: AppColors.mutedForeground),
             ),
           ],
         ),
@@ -1305,12 +1462,14 @@ class _VoiceRecordingBar extends StatelessWidget {
     required this.onSend,
   });
 
-  String _fmt(int s) => '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+  String _fmt(int s) =>
+      '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.fromLTRB(16, 12, 16, MediaQuery.of(context).padding.bottom + 12),
+      padding: EdgeInsets.fromLTRB(
+          16, 12, 16, MediaQuery.of(context).padding.bottom + 12),
       decoration: BoxDecoration(
         color: AppColors.bgSubtle,
         border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
@@ -1326,14 +1485,16 @@ class _VoiceRecordingBar extends StatelessWidget {
                 color: AppColors.destructive.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.delete_outline_rounded, color: AppColors.destructive, size: 20),
+              child: const Icon(Icons.delete_outline_rounded,
+                  color: AppColors.destructive, size: 20),
             ),
           ),
           const SizedBox(width: 12),
           Container(
             width: 8,
             height: 8,
-            decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+            decoration:
+                const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
           )
               .animate(onPlay: (c) => c.repeat(reverse: true))
               .fadeIn(duration: 600.ms),
@@ -1357,7 +1518,8 @@ class _VoiceRecordingBar extends StatelessWidget {
                 gradient: AppColors.primaryGradient,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+              child:
+                  const Icon(Icons.send_rounded, color: Colors.white, size: 20),
             ),
           ),
         ],

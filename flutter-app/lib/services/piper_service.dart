@@ -232,12 +232,13 @@ class PiperService extends ChangeNotifier {
     if (chatId.isEmpty) return;
 
     _messages.putIfAbsent(chatId, () => []);
+    final isEmojiSticker = isStickerEmoji(e.content);
     final msg = Message(
       id: e.msgId ?? '${DateTime.now().millisecondsSinceEpoch}',
       isMe: false,
       senderName: e.peerName,
       senderColor: colorForPeer(e.peerId ?? ''),
-      type: MsgType.text,
+      type: isEmojiSticker ? MsgType.emoji : MsgType.text,
       text: e.content,
       time: e.timestamp != null
           ? DateTime.fromMillisecondsSinceEpoch(e.timestamp!)
@@ -306,7 +307,8 @@ class PiperService extends ChangeNotifier {
           : null;
       final isVoice = _isVoiceFileName(e.fileName);
       final isImage = _isImageFileName(e.fileName);
-      final progress = (e.fileSize ?? 0) > 0 ? (e.progress ?? 0) / e.fileSize! : 0.0;
+      final progress =
+          (e.fileSize ?? 0) > 0 ? (e.progress ?? 0) / e.fileSize! : 0.0;
 
       switch (e.transferKind) {
         case 'offered':
@@ -324,7 +326,9 @@ class PiperService extends ChangeNotifier {
             fileExt: e.fileName?.split('.').last.toUpperCase(),
             fileSize: e.fileSize,
             filePath: filePath,
-            time: existingIdx >= 0 ? _messages[chatId]![existingIdx].time : DateTime.now(),
+            time: existingIdx >= 0
+                ? _messages[chatId]![existingIdx].time
+                : DateTime.now(),
           );
 
           final isNew = existingIdx < 0;
@@ -349,8 +353,10 @@ class PiperService extends ChangeNotifier {
         case 'completed':
           if (tid.isEmpty || !_processedIncomingTransfers.add(tid)) return;
           _messages.putIfAbsent(chatId, () => []);
-          final msgId = tid.isNotEmpty ? tid : '${DateTime.now().millisecondsSinceEpoch}';
-          final existingIdx = _messages[chatId]!.indexWhere((m) => m.id == msgId);
+          final msgId =
+              tid.isNotEmpty ? tid : '${DateTime.now().millisecondsSinceEpoch}';
+          final existingIdx =
+              _messages[chatId]!.indexWhere((m) => m.id == msgId);
           final fileMsg = Message(
             id: msgId,
             isMe: false,
@@ -364,7 +370,9 @@ class PiperService extends ChangeNotifier {
             fileSize: e.fileSize,
             filePath: filePath,
             voiceDuration: isVoice ? _durationFromVoiceName(e.fileName) : null,
-            time: existingIdx >= 0 ? _messages[chatId]![existingIdx].time : DateTime.now(),
+            time: existingIdx >= 0
+                ? _messages[chatId]![existingIdx].time
+                : DateTime.now(),
           );
 
           if (existingIdx >= 0) {
@@ -462,10 +470,11 @@ class PiperService extends ChangeNotifier {
     }
 
     _messages.putIfAbsent(chatId, () => []);
+    final isEmojiSticker = isStickerEmoji(text);
     final outMsg = Message(
       id: '${DateTime.now().millisecondsSinceEpoch}',
       isMe: true,
-      type: MsgType.text,
+      type: isEmojiSticker ? MsgType.emoji : MsgType.text,
       text: text,
       time: DateTime.now(),
     );
@@ -851,6 +860,8 @@ class PiperService extends ChangeNotifier {
     switch (message.type) {
       case MsgType.text:
         return message.text ?? '';
+      case MsgType.emoji:
+        return message.text ?? 'Эмодзи';
       case MsgType.file:
         return 'Файл: ${message.fileName ?? ''}'.trim();
       case MsgType.voice:
