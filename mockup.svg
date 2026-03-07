@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Piper mockup placeholder</title>
+  <desc id="desc">Placeholder preview for Piper app screen.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#312e81" />
+      <stop offset="100%" stop-color="#6d28d9" />
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.16" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.06" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="720" fill="url(#bg)" />
+  <rect x="120" y="80" width="960" height="560" rx="28" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.25" />
+  <rect x="170" y="140" width="350" height="44" rx="12" fill="#ffffff" fill-opacity="0.18" />
+  <rect x="170" y="210" width="860" height="20" rx="10" fill="#ffffff" fill-opacity="0.12" />
+  <rect x="170" y="248" width="720" height="20" rx="10" fill="#ffffff" fill-opacity="0.12" />
+  <rect x="170" y="320" width="420" height="260" rx="18" fill="#ffffff" fill-opacity="0.09" />
+  <rect x="620" y="320" width="410" height="120" rx="18" fill="#ffffff" fill-opacity="0.09" />
+  <rect x="620" y="460" width="410" height="120" rx="18" fill="#ffffff" fill-opacity="0.09" />
+  <text x="600" y="378" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="48" font-weight="700" fill="#ffffff" fill-opacity="0.95">
+    Piper
+  </text>
+  <text x="600" y="424" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" fill="#e9d5ff" fill-opacity="0.95">
+    Mockup placeholder
+  </text>
+</svg>
