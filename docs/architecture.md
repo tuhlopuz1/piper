@@ -366,3 +366,87 @@ See full threat model: [threat-model.md](threat-model.md)
 │  └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+
+
+graph TD
+    %% Настройки стилей для красивого отображения в презентации
+    classDef nodeApp fill:#2c3e50,stroke:#34495e,stroke-width:2px,color:#ecf0f1;
+    classDef uiLayer fill:#2980b9,stroke:#2980b9,color:#fff;
+    classDef appLayer fill:#27ae60,stroke:#27ae60,color:#fff;
+    classDef protoLayer fill:#e67e22,stroke:#e67e22,color:#fff;
+    classDef secLayer fill:#8e44ad,stroke:#8e44ad,color:#fff;
+    classDef transLayer fill:#c0392b,stroke:#c0392b,color:#fff;
+    classDef networkNode fill:#34495e,stroke:#f1c40f,stroke-width:3px,color:#fff;
+
+    %% ----------------------------------------------------
+    %% БЛОК 1: ТОПОЛОГИЯ СЕТИ (NETWORK TOPOLOGY)
+    %% ----------------------------------------------------
+    subgraph NetworkTopology[Топология сети P2P и Multi-hop]
+        direction LR
+        NodeA(("Узел A<br/>Инициатор")):::networkNode
+        NodeB(("Узел B<br/>Ретранслятор")):::networkNode
+        NodeC(("Узел C<br/>Получатель")):::networkNode
+        NodeD(("Узел D<br/>Вне зоны Wi-Fi")):::networkNode
+
+        NodeA <-->|Wi-Fi Прямой линк| NodeB
+        NodeB <-->|Wi-Fi Прямой линк| NodeC
+        NodeA -.->|Мультихоп маршрут через B| NodeC
+        NodeD -.->|BLE или Wi-Fi Direct Поиск| NodeA
+    end
+
+    %% ----------------------------------------------------
+    %% БЛОК 2: АРХИТЕКТУРА УЗЛА (NODE ARCHITECTURE)
+    %% ----------------------------------------------------
+    subgraph NodeArchitecture[Внутренняя архитектура узла Hex.Team]
+        direction TB
+
+        UI["UI и UX Layer<br/>Интерфейс, Метрики, Статусы"]:::uiLayer
+
+        subgraph Services[Application Services - Бизнес-логика]
+            Chat["💬 Messaging<br/>Текст, Статусы"]:::appLayer
+            Calls["📞 Real-time Calls<br/>Голос и Видео"]:::appLayer
+            Files["📁 File Transfer<br/>Чанки, Хэши SHA-256, Докачка"]:::appLayer
+        end
+
+        subgraph Protocol[Protocol and Routing Layer - Надежность]
+            Routing["📍 Routing Engine<br/>Таблица соседей, Мультихоп"]:::protoLayer
+            Reliability["🔄 Reliability Manager<br/>Очереди, ACK, Retries"]:::protoLayer
+            Dedup["🛡 Loop Protection<br/>Дедупликация ID, Защита от петель"]:::protoLayer
+            Buffer["⏱️ QoS and Buffers<br/>Jitter Buffer, Приоритеты"]:::protoLayer
+        end
+
+        subgraph Security [Security Layer - Безопасность]
+            Crypto["🔒 Cryptography<br/>E2E Шифрование, Аутентификация"]:::secLayer
+        end
+
+        subgraph Transport [Transport and Discovery Layer - Сеть]
+            Discovery["📡 Discovery Module<br/>mDNS, BLE Beacon"]:::transLayer
+            TCP["📦 Reliable Transport TCP<br/>Файлы, Сообщения"]:::transLayer
+            UDP["⚡️ Fast Transport UDP/RTP<br/>Голос и Видео"]:::transLayer
+        end
+
+        %% Связи внутри узла (Логика потока данных)
+        UI -->|Ввод пользователя| Chat
+        UI -->|Управление| Calls
+        UI -->|Выбор файла| Files
+        
+        Chat -->|Текст| Reliability
+        Files -->|Поток чанков| Reliability
+        Calls -->|Медиа поток| Buffer
+
+        Reliability -->|Контроль доставки| Dedup
+        Dedup -->|Пакет данных| Routing
+        Buffer -->|UDP пакеты| Routing
+
+        Routing -->|Маршрутизация| Crypto
+
+        Crypto -->|Зашифрованный трафик| TCP
+        Crypto -->|Зашифрованный трафик| UDP
+        Crypto -.->|Подписи маячков| Discovery
+    end
+
+    %% Связь архитектуры приложения с сетью
+    TCP ==>|Sockets| NodeA
+    UDP ==>|Sockets| NodeA
+    Discovery ==>|Radio| NodeA
