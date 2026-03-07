@@ -764,6 +764,8 @@ class PiperService extends ChangeNotifier {
   void inviteToGroup(String groupId, String peerId) =>
       _node?.inviteToGroup(groupId, peerId);
   void leaveGroup(String groupId) => _node?.leaveGroup(groupId);
+  void kickFromGroup(String groupId, String peerId) =>
+      _node?.kickFromGroup(groupId, peerId);
 
   // ── Helpers for UI ────────────────────────────────────────────────────────
 

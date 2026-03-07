@@ -131,6 +131,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                   style:
                       GoogleFonts.inter(fontSize: 12, color: Colors.white70),
                 ),
+                if (cs.state == CallState.active) ...[
+                  const SizedBox(height: 6),
+                  _VideoCallMetricsBadge(cs: cs),
+                ],
               ],
             ),
           ),
@@ -226,6 +230,33 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _VideoCallMetricsBadge extends StatelessWidget {
+  final CallService cs;
+  const _VideoCallMetricsBadge({required this.cs});
+
+  @override
+  Widget build(BuildContext context) {
+    final rtt = cs.callRtt.toStringAsFixed(0);
+    final jitter = cs.callJitter.toStringAsFixed(0);
+    final loss = cs.callPacketLoss.toStringAsFixed(1);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        'RTT ${rtt}ms  Jitter ${jitter}ms  Loss $loss%',
+        style: GoogleFonts.inter(
+          fontSize: 10,
+          color: Colors.white70,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
       ),
     );
   }

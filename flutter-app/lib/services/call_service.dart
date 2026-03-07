@@ -147,6 +147,11 @@ class CallService extends ChangeNotifier {
   int _iceRestartAttempts = 0;
   static const int _maxIceRestarts = 2;
 
+  // ── WebRTC stats (polled every 2s when call is active) ────────────────────
+  Timer? _statsTimer;
+  double callRtt = 0.0;         // round-trip time, ms
+  double callJitter = 0.0;      // jitter, ms
+  double callPacketLoss = 0.0;  // packet loss, %
 
   /// Called when a call ends with a record of what happened.
   void Function(CallRecord record)? onCallEnded;
@@ -679,8 +684,70 @@ class CallService extends ChangeNotifier {
       _cancelOfferAndRingTimers();
       _touchSignal();
       _inc('call_established');
+      _startStatsPolling();
       notifyListeners();
     }
+  }
+
+  void _startStatsPolling() {
+    _statsTimer?.cancel();
+    _statsTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(_pollStats());
+    });
+  }
+
+  Future<void> _pollStats() async {
+    final pc = _pc;
+    if (pc == null || state != CallState.active) return;
+    try {
+      final reports = await pc.getStats();
+      double? rtt;
+      double? jitter;
+      double? lossPercent;
+
+      for (final report in reports) {
+        final v = report.values;
+        // Standard WebRTC Stats API
+        if (report.type == 'remote-inbound-rtp') {
+          final r = _toDouble(v['roundTripTime']);
+          if (r != null) rtt = r * 1000; // s → ms
+        }
+        if (report.type == 'inbound-rtp') {
+          final j = _toDouble(v['jitter']);
+          if (j != null) jitter = j * 1000; // s → ms
+          final lost = _toInt(v['packetsLost']);
+          final received = _toInt(v['packetsReceived']);
+          if (lost != null && received != null) {
+            final total = lost + received;
+            lossPercent = total > 0 ? (lost / total * 100.0) : 0.0;
+          }
+        }
+        // Legacy Google stats format (older Android libwebrtc)
+        if (report.type == 'ssrc') {
+          final r = _toDouble(v['googRtt']);
+          if (r != null) rtt ??= r;
+          final j = _toDouble(v['googJitterReceived']);
+          if (j != null) jitter ??= j; // already in ms
+        }
+      }
+
+      callRtt = rtt ?? callRtt;
+      callJitter = jitter ?? callJitter;
+      callPacketLoss = lossPercent ?? callPacketLoss;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  static double? _toDouble(dynamic v) {
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v);
+    return null;
+  }
+
+  static int? _toInt(dynamic v) {
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v);
+    return null;
   }
 
   Future<void> _handleOffer(PiperEvent e, Map<String, dynamic> data) async {
@@ -1022,6 +1089,8 @@ class CallService extends ChangeNotifier {
     _callTimer?.cancel();
     _callTimer = null;
     callDurationSeconds = 0;
+    _statsTimer?.cancel();
+    _statsTimer = null;
 
     _offerTimer?.cancel();
     _offerTimer = null;
@@ -1091,6 +1160,10 @@ class CallService extends ChangeNotifier {
     _capturedIceSdpMLineIndex = 0;
     _advertisedIceIPs.clear();
     _iceRestartAttempts = 0;
+
+    callRtt = 0.0;
+    callJitter = 0.0;
+    callPacketLoss = 0.0;
   }
 
   Future<MediaStream> _getUserMedia(bool isVideo) {

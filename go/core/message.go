@@ -26,6 +26,7 @@ const (
 	MsgTypeGroupJoin   MsgType = "group_join"   // peerID accepted invite to GroupID
 	MsgTypeGroupLeave  MsgType = "group_leave"  // peerID left GroupID
 	MsgTypeGroupText   MsgType = "group_text"   // encrypted chat message in a group
+	MsgTypeGroupKick   MsgType = "group_kick"   // owner removes a member (To = target peerID)
 
 	// File transfer message types
 	MsgTypeFileOffer  MsgType = "file_offer"  // sender proposes a file transfer

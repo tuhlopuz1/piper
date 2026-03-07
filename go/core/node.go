@@ -289,6 +289,33 @@ func (n *Node) LeaveGroup(groupID string) {
 	n.groups.Delete(groupID)
 }
 
+// KickFromGroup removes targetPeerID from the group locally and notifies all
+// remaining members (including the kicked peer) via MsgTypeGroupKick.
+func (n *Node) KickFromGroup(groupID, targetPeerID string) {
+	g := n.groups.Get(groupID)
+	if g == nil {
+		return
+	}
+	kickMsg := Message{
+		ID:        uuid.NewString(),
+		Type:      MsgTypeGroupKick,
+		PeerID:    n.id,
+		Name:      n.name,
+		GroupID:   groupID,
+		To:        targetPeerID,
+		Timestamp: time.Now(),
+	}
+	// Notify all members (including the target) before removing locally.
+	n.sendToGroupMembers(g, kickMsg)
+	n.groups.RemoveMember(groupID, targetPeerID)
+	peerName := targetPeerID
+	if p := n.peers.Get(targetPeerID); p != nil {
+		peerName = p.DisplayName
+	}
+	log.Printf("[node] kicked %s from group %q", peerName, g.Name)
+	n.emit(Event{Group: &GroupEvent{Group: g, PeerID: targetPeerID, PeerName: peerName, Kind: GroupMemberLeft}})
+}
+
 // SendGroup encrypts text per-member (fanout) and unicasts to each group member.
 func (n *Node) SendGroup(text, groupID string) {
 	g := n.groups.Get(groupID)
@@ -612,7 +639,6 @@ func (n *Node) streamFileChunks(t *Transfer, key [32]byte, cn *conn) {
 		// Accepted — proceed.
 	case <-time.After(30 * time.Second):
 		n.transfers.Fail(t.ID, "accept timeout")
-		t.file.Close()
 		n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferFailed}})
 		return
 	case <-n.ctx.Done():
@@ -620,7 +646,6 @@ func (n *Node) streamFileChunks(t *Transfer, key [32]byte, cn *conn) {
 		return
 	}
 
-	defer t.file.Close()
 	buf := make([]byte, ChunkSize)
 	seq := 0
 	h := sha256.New()
@@ -659,6 +684,18 @@ func (n *Node) streamFileChunks(t *Transfer, key [32]byte, cn *conn) {
 			seq++
 			n.transfers.UpdateProgress(t.ID, t.Progress+int64(nr))
 			n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferProgress}})
+
+			// Rate-limit outgoing chunks to avoid flooding the TCP buffer
+			// and congesting the receiver. Target: 5 MB/s per transfer.
+			const rateBytesPerSec = 5 * 1024 * 1024
+			sleepDur := time.Duration(float64(nr) * float64(time.Second) / rateBytesPerSec)
+			if sleepDur > 0 {
+				select {
+				case <-n.ctx.Done():
+					return
+				case <-time.After(sleepDur):
+				}
+			}
 		}
 		if readErr == io.EOF {
 			break
@@ -1101,6 +1138,9 @@ func (n *Node) readLoop(cn *conn) {
 		case MsgTypeGroupLeave:
 			n.handleGroupLeave(msg)
 
+		case MsgTypeGroupKick:
+			n.handleGroupKick(msg)
+
 		case MsgTypeGroupText:
 			if msg.To == n.id {
 				n.handleGroupText(msg)
@@ -1228,6 +1268,27 @@ func (n *Node) handleGroupLeave(msg Message) {
 	n.emit(Event{Group: &GroupEvent{Group: g, PeerID: msg.PeerID, PeerName: peerName, Kind: GroupMemberLeft}})
 }
 
+func (n *Node) handleGroupKick(msg Message) {
+	g := n.groups.Get(msg.GroupID)
+	if g == nil {
+		return
+	}
+	if msg.To == n.id {
+		// We were kicked: leave the group locally.
+		log.Printf("[node] kicked from group %q by %s", g.Name, msg.Name)
+		n.emit(Event{Group: &GroupEvent{Group: g, PeerID: n.id, PeerName: n.name, Kind: GroupMemberLeft}})
+		n.groups.Delete(msg.GroupID)
+		return
+	}
+	// Another member was kicked: remove from our local view.
+	n.groups.RemoveMember(msg.GroupID, msg.To)
+	peerName := msg.To
+	if p := n.peers.Get(msg.To); p != nil {
+		peerName = p.DisplayName
+	}
+	n.emit(Event{Group: &GroupEvent{Group: g, PeerID: msg.To, PeerName: peerName, Kind: GroupMemberLeft}})
+}
+
 func (n *Node) handleGroupText(msg Message) {
 	if msg.To != n.id {
 		return
@@ -1265,7 +1326,7 @@ func (n *Node) handleFileOffer(msg Message, cn *conn) {
 		return
 	}
 
-	destPath := filepath.Join(dlDir, msg.FileName)
+	destPath := filepath.Join(dlDir, filepath.Base(msg.FileName))
 	f, err := os.Create(destPath)
 	if err != nil {
 		log.Printf("[node] create %s: %v", destPath, err)
@@ -1313,8 +1374,8 @@ func (n *Node) handleFileAccept(msg Message) {
 	}
 	log.Printf("[node] file %q accepted by %s", t.FileName, msg.Name)
 	n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferStarted}})
-	// Signal the streaming goroutine to start sending chunks.
-	close(t.accepted)
+	// Signal the streaming goroutine to start sending chunks (guard against duplicate FileAccept).
+	t.acceptOnce.Do(func() { close(t.accepted) })
 }
 
 func (n *Node) handleFileChunk(msg Message) {

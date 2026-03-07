@@ -121,6 +121,11 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
                     color: AppColors.primaryLight.withValues(alpha: 0.6),
                   ),
 
+              if (cs.state == CallState.active) ...[
+                const SizedBox(height: 12),
+                _CallMetricsBadge(cs: cs),
+              ],
+
               const Spacer(),
 
               // ── Controls ───────────────────────────────────────────────────
@@ -170,6 +175,34 @@ String _initials(String name) {
   final parts = name.trim().split(' ');
   if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
   return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
+}
+
+class _CallMetricsBadge extends StatelessWidget {
+  final CallService cs;
+  const _CallMetricsBadge({required this.cs});
+
+  @override
+  Widget build(BuildContext context) {
+    final rtt = cs.callRtt.toStringAsFixed(0);
+    final jitter = cs.callJitter.toStringAsFixed(0);
+    final loss = cs.callPacketLoss.toStringAsFixed(1);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppColors.bgSubtle.withValues(alpha: 0.8),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border, width: 0.5),
+      ),
+      child: Text(
+        'RTT ${rtt}ms  Jitter ${jitter}ms  Loss $loss%',
+        style: GoogleFonts.inter(
+          fontSize: 11,
+          color: AppColors.mutedForeground,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+    );
+  }
 }
 
 class _CallButton extends StatelessWidget {

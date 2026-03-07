@@ -270,6 +270,15 @@ func PiperLeaveGroup(handle C.int, groupID *C.char) {
 	e.node.LeaveGroup(C.GoString(groupID))
 }
 
+//export PiperKickFromGroup
+func PiperKickFromGroup(handle C.int, groupID, peerID *C.char) {
+	e := getEntry(handle)
+	if e == nil {
+		return
+	}
+	e.node.KickFromGroup(C.GoString(groupID), C.GoString(peerID))
+}
+
 // ─── Network helpers ─────────────────────────────────────────────────────────
 
 // PiperLocalIPs returns a JSON array of all non-loopback IPv4 addresses on

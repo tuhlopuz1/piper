@@ -104,6 +104,7 @@ extern char* PiperSendCallSignal(int handle, char* toPeerID, char* signalType, c
 extern char* PiperCreateGroup(int handle, char* name);
 extern void PiperInviteToGroup(int handle, char* groupID, char* peerID);
 extern void PiperLeaveGroup(int handle, char* groupID);
+extern void PiperKickFromGroup(int handle, char* groupID, char* peerID);
 extern char* PiperLocalIPs(int handle);
 extern char* PiperGetPeerIP(int handle, char* peerID);
 extern int PiperGetTURNPort(int handle);

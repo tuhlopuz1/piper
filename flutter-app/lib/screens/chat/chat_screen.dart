@@ -22,6 +22,7 @@ import '../call/voice_call_screen.dart';
 import '../call/video_call_screen.dart';
 import '../media/media_viewer_screen.dart';
 import '../contacts/contact_info_screen.dart';
+import '../group/group_info_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final Chat chat;
@@ -523,8 +524,12 @@ class _ChatAppBar extends StatelessWidget {
       isOnline = onlineCount > 0;
       statusText = '${onlineCount + 1} участников';
     } else if (chat.isGroup) {
+      final groupId = chat.id.replaceFirst('group:', '');
+      final groupInfo =
+          svc.groups.where((g) => g.id == groupId).firstOrNull;
+      final count = groupInfo?.members.length ?? chat.memberCount;
       isOnline = false;
-      statusText = 'Группа';
+      statusText = '$count участников';
     } else {
       final peer = svc.peers.where((p) => p.id == chat.id).firstOrNull;
       isOnline = peer?.isConnected ?? false;
@@ -549,7 +554,10 @@ class _ChatAppBar extends StatelessWidget {
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                    builder: (_) => ContactInfoScreen(chat: chat)),
+                  builder: (_) => chat.isGroup && chat.id != 'global'
+                      ? GroupInfoScreen(chat: chat)
+                      : ContactInfoScreen(chat: chat),
+                ),
               ),
               child: Row(
                 children: [

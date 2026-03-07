@@ -218,6 +218,15 @@ class PiperNode {
     malloc.free(gidPtr);
   }
 
+  /// Remove a peer from a group (owner action).
+  void kickFromGroup(String groupID, String peerID) {
+    final gidPtr = groupID.toNativeUtf8();
+    final pidPtr = peerID.toNativeUtf8();
+    _bindings.kickFromGroup(_handle, gidPtr, pidPtr);
+    malloc.free(gidPtr);
+    malloc.free(pidPtr);
+  }
+
   // ─── Network helpers ───────────────────────────────────────────────────────
 
   /// Returns all non-loopback IPv4 addresses on this device, including

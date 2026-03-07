@@ -43,10 +43,11 @@ type Transfer struct {
 	VoiceDuration  int
 
 	// Internal — not exposed to TUI.
-	file     *os.File      // open file handle (send: read, recv: write)
-	hash     hash.Hash     // running SHA-256
-	filePath string        // full path (send: source, recv: destination)
-	accepted chan struct{} // closed when FileAccept is received (sender side)
+	file       *os.File      // open file handle (send: read, recv: write)
+	hash       hash.Hash     // running SHA-256
+	filePath   string        // full path (send: source, recv: destination)
+	accepted   chan struct{}  // closed when FileAccept is received (sender side)
+	acceptOnce sync.Once     // guards close(accepted) against double-close panic
 }
 
 type TransferOptions struct {

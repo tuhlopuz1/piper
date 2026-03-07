@@ -7,6 +7,7 @@ import '../../../models/chat.dart';
 import '../../../services/piper_service.dart';
 import '../../../widgets/chat_item.dart';
 import '../../search/search_screen.dart';
+import '../../group/create_group_screen.dart';
 
 class ChatsTab extends StatefulWidget {
   const ChatsTab({super.key});
@@ -59,7 +60,13 @@ class _ChatsTabState extends State<ChatsTab> {
               ),
             ),
             const SizedBox(width: 8),
-            _NavBtn(icon: Icons.person_add_outlined, onTap: () {}),
+            _NavBtn(
+              icon: Icons.group_add_outlined,
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
+              ),
+            ),
           ],
         ),
       ),

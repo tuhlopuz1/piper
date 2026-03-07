@@ -66,6 +66,11 @@ typedef _InviteToGroupDart = void Function(
 typedef _LeaveGroupC = Void Function(Int32 handle, Pointer<Utf8> groupID);
 typedef _LeaveGroupDart = void Function(int handle, Pointer<Utf8> groupID);
 
+typedef _KickFromGroupC = Void Function(
+    Int32 handle, Pointer<Utf8> groupID, Pointer<Utf8> peerID);
+typedef _KickFromGroupDart = void Function(
+    int handle, Pointer<Utf8> groupID, Pointer<Utf8> peerID);
+
 typedef _ListPeersC = Pointer<Utf8> Function(Int32 handle);
 typedef _ListPeersDart = Pointer<Utf8> Function(int handle);
 
@@ -123,6 +128,7 @@ class PiperBindings {
   late final _CreateGroupDart createGroup;
   late final _InviteToGroupDart inviteToGroup;
   late final _LeaveGroupDart leaveGroup;
+  late final _KickFromGroupDart kickFromGroup;
   late final _ListPeersDart listPeers;
   late final _ListGroupsDart listGroups;
   late final _SetEventCallbackDart setEventCallback;
@@ -164,6 +170,8 @@ class PiperBindings {
         'PiperInviteToGroup');
     leaveGroup =
         _lib.lookupFunction<_LeaveGroupC, _LeaveGroupDart>('PiperLeaveGroup');
+    kickFromGroup = _lib.lookupFunction<_KickFromGroupC, _KickFromGroupDart>(
+        'PiperKickFromGroup');
     listPeers =
         _lib.lookupFunction<_ListPeersC, _ListPeersDart>('PiperListPeers');
     listGroups =
