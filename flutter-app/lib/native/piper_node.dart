@@ -267,6 +267,11 @@ class PiperNode {
     return port;
   }
 
+  /// Trigger an immediate discovery broadcast so peers are found faster.
+  void rescan() {
+    _bindings.rescan(_handle);
+  }
+
   /// Closes the UDP proxy previously opened for [peerId].
   void closeProxy(String peerId) {
     final ptr = peerId.toNativeUtf8();

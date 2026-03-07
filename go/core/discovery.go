@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/grandcat/zeroconf"
@@ -32,6 +33,7 @@ type announce struct {
 	PeerID string `json:"id"`
 	Name   string `json:"name"`
 	Port   int    `json:"port"`
+	IP     string `json:"ip,omitempty"` // sender's preferred LAN IP; receiver uses this instead of raddr.IP
 }
 
 // Discovery handles both mDNS and UDP-broadcast peer discovery.
@@ -160,6 +162,104 @@ func firstIP(v4, v6 []net.IP) net.IP {
 	return nil
 }
 
+// preferredIfaces returns UP non-loopback interfaces that look like physical
+// WiFi/Ethernet adapters. It skips virtual/software interfaces (VMware,
+// VirtualBox, Hyper-V vEthernet, Docker, TAP/TUN, VPN tunnels) that would
+// cause us to broadcast from — or advertise — the wrong IP.
+//
+// If no physical interface is found we fall back to all valid UP interfaces
+// so the app still works on unusual setups.
+func preferredIfaces() []net.Interface {
+	all, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+
+	// Name substrings that identify virtual/software interfaces (case-insensitive).
+	skipNames := []string{
+		"vmware", "vmnet", "vbox", "virtualbox",
+		"vethernet", "veth", "docker", "br-",
+		"virbr", "hyperv", "hyper-v",
+		"tailscale", "zerotier",
+		"tun", "tap", "utun",
+		"pptp", "l2tp", "ipsec",
+		"isatap", "teredo", "6to4",
+	}
+
+	var preferred, fallback []net.Interface
+	for _, iface := range all {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if iface.Flags&net.FlagBroadcast == 0 && iface.Flags&net.FlagMulticast == 0 {
+			continue
+		}
+		if !ifaceHasIPv4(iface) {
+			continue
+		}
+		fallback = append(fallback, iface)
+		nameLower := strings.ToLower(iface.Name)
+		virtual := false
+		for _, skip := range skipNames {
+			if strings.Contains(nameLower, skip) {
+				virtual = true
+				break
+			}
+		}
+		if !virtual {
+			preferred = append(preferred, iface)
+		}
+	}
+	if len(preferred) > 0 {
+		return preferred
+	}
+	return fallback
+}
+
+func ifaceHasIPv4(iface net.Interface) bool {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if ok && ipnet.IP.To4() != nil && !ipnet.IP.IsLoopback() {
+			return true
+		}
+	}
+	return false
+}
+
+// ownIP returns our IPv4 address on the preferred (physical) network interface.
+// It is called each broadcast tick so the advertised IP stays current when
+// the machine switches networks.
+func ownIP() net.IP {
+	for _, iface := range preferredIfaces() {
+		addrs, _ := iface.Addrs()
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if ok && ipnet.IP.To4() != nil && !ipnet.IP.IsLoopback() {
+				return ipnet.IP.To4()
+			}
+		}
+	}
+	return nil
+}
+
+// Rescan triggers an immediate UDP broadcast so peers are found faster after
+// the user manually requests a refresh. The regular ticker continues as usual.
+func (d *Discovery) Rescan() {
+	if d.udpConn == nil {
+		return
+	}
+	a := announce{PeerID: d.peerID, Name: d.name, Port: d.port}
+	if ip := ownIP(); ip != nil {
+		a.IP = ip.String()
+	}
+	payload, _ := json.Marshal(a)
+	d.broadcastPayload(payload)
+}
+
 // ─── UDP broadcast ───────────────────────────────────────────────────────────
 
 func (d *Discovery) startUDP(ctx context.Context) error {
@@ -186,8 +286,16 @@ func (d *Discovery) startUDP(ctx context.Context) error {
 
 func (d *Discovery) listenUDP(ctx context.Context) {
 	buf := make([]byte, 512)
-	// Our own payload for unicast replies.
-	selfPayload, _ := json.Marshal(announce{PeerID: d.peerID, Name: d.name, Port: d.port})
+	// Our own payload for unicast replies. Built inline each time a peer
+	// contacts us so the IP is always fresh.
+	makeSelfPayload := func() []byte {
+		a := announce{PeerID: d.peerID, Name: d.name, Port: d.port}
+		if ip := ownIP(); ip != nil {
+			a.IP = ip.String()
+		}
+		b, _ := json.Marshal(a)
+		return b
+	}
 	for {
 		d.udpConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		n, raddr, err := d.udpConn.ReadFromUDP(buf)
@@ -206,14 +314,25 @@ func (d *Discovery) listenUDP(ctx context.Context) {
 		if a.PeerID == d.peerID {
 			continue // ourselves
 		}
-		d.onFound(a.PeerID, a.Name, raddr.IP, a.Port)
+		// Prefer the IP the sender explicitly advertised (derived from their
+		// preferred physical interface) over raddr.IP, which may come from a
+		// virtual adapter if the machine has multiple network interfaces.
+		ip := raddr.IP
+		if a.IP != "" {
+			if parsed := net.ParseIP(a.IP); parsed != nil {
+				if v4 := parsed.To4(); v4 != nil {
+					ip = v4
+				}
+			}
+		}
+		d.onFound(a.PeerID, a.Name, ip, a.Port)
 
 		// Send a unicast reply directly to the sender so they can discover
 		// us even when their OS firewall blocks inbound broadcast packets.
 		// Because the sender previously sent outbound UDP from this address,
 		// their firewall treats our reply as a response and lets it through.
 		d.udpConn.SetWriteDeadline(time.Now().Add(time.Second))
-		d.udpConn.WriteToUDP(selfPayload, raddr)
+		d.udpConn.WriteToUDP(makeSelfPayload(), raddr)
 	}
 }
 
@@ -221,9 +340,14 @@ func (d *Discovery) sendUDP(ctx context.Context) {
 	ticker := time.NewTicker(udpBroadcastInterval)
 	defer ticker.Stop()
 
-	payload, _ := json.Marshal(announce{PeerID: d.peerID, Name: d.name, Port: d.port})
-
 	for {
+		// Rebuild each tick: if the machine switches networks the advertised
+		// IP updates automatically within one broadcast interval.
+		a := announce{PeerID: d.peerID, Name: d.name, Port: d.port}
+		if ip := ownIP(); ip != nil {
+			a.IP = ip.String()
+		}
+		payload, _ := json.Marshal(a)
 		d.broadcastPayload(payload)
 		select {
 		case <-ctx.Done():
@@ -234,25 +358,7 @@ func (d *Discovery) sendUDP(ctx context.Context) {
 }
 
 func (d *Discovery) broadcastPayload(payload []byte) {
-	// Always try the global broadcast address — works on most Android devices
-	// even when per-subnet broadcast is filtered.
-	globalDst := &net.UDPAddr{IP: net.IPv4bcast, Port: udpBroadcastPort}
-	d.udpConn.SetWriteDeadline(time.Now().Add(time.Second))
-	d.udpConn.WriteToUDP(payload, globalDst)
-
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return
-	}
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 {
-			continue
-		}
-		// Accept interfaces with either Broadcast or Multicast flag —
-		// some Android WiFi drivers only report FlagMulticast on wlan0.
-		if iface.Flags&net.FlagBroadcast == 0 && iface.Flags&net.FlagMulticast == 0 {
-			continue
-		}
+	for _, iface := range preferredIfaces() {
 		addrs, err := iface.Addrs()
 		if err != nil {
 			continue
@@ -266,7 +372,7 @@ func (d *Discovery) broadcastPayload(payload []byte) {
 			if ip4 == nil || ip4.IsLoopback() {
 				continue
 			}
-			// Compute subnet broadcast address: IP | ~mask
+			// Subnet broadcast: IP | ~mask  (e.g. 192.168.1.255)
 			broadcast := make(net.IP, 4)
 			for i := range broadcast {
 				broadcast[i] = ip4[i] | ^ipnet.Mask[i]

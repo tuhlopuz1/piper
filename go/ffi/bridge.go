@@ -436,6 +436,18 @@ func PiperMeshDiag(handle C.int) *C.char {
 	return C.CString(string(data))
 }
 
+// PiperRescan triggers an immediate discovery broadcast so peers are found
+// faster after the user manually requests a refresh in the UI.
+//
+//export PiperRescan
+func PiperRescan(handle C.int) {
+	e := getEntry(handle)
+	if e == nil {
+		return
+	}
+	e.node.Rescan()
+}
+
 // ─── Memory management ──────────────────────────────────────────────────────
 
 //export PiperFreeString

@@ -41,7 +41,9 @@ class _ContactsTabState extends State<ContactsTab>
   }
 
   void _refresh() {
+    if (_scanning) return;
     setState(() => _scanning = true);
+    context.read<PiperService>().rescan();
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted) setState(() => _scanning = false);
     });

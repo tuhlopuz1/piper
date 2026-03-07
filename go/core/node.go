@@ -591,6 +591,14 @@ func (n *Node) pingLoop() {
 	}
 }
 
+// Rescan triggers an immediate discovery broadcast so that peers are
+// found faster when the user manually requests a refresh.
+func (n *Node) Rescan() {
+	if n.discovery != nil {
+		n.discovery.Rescan()
+	}
+}
+
 // Stop shuts down the node cleanly.
 func (n *Node) Stop() {
 	n.cancel()

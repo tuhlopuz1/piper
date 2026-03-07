@@ -109,6 +109,10 @@ extern void PiperSetDownloadsDir(int handle, char* dir);
 extern char* PiperGetPeerTable(int handle);
 extern char* PiperGetLocalInfo(int handle);
 extern void PiperInjectPeers(int handle, char* recordsJSON);
+extern int PiperOpenProxy(int handle, char* peerID, char* remoteIcePwd);
+extern void PiperCloseProxy(int handle, char* peerID);
+extern char* PiperMeshDiag(int handle);
+extern void PiperRescan(int handle);
 extern void PiperFreeString(char* s);
 
 #ifdef __cplusplus

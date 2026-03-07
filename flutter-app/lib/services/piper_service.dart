@@ -346,6 +346,9 @@ class PiperService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Trigger an immediate discovery broadcast so peers are found faster.
+  void rescan() => _node?.rescan();
+
   void sendFile(String peerId, String filePath) {
     if (_node == null) return;
 

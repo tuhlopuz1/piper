@@ -85,6 +85,9 @@ typedef _OpenProxyDart = int Function(int handle, Pointer<Utf8> peerID, Pointer<
 typedef _CloseProxyC = Void Function(Int32 handle, Pointer<Utf8> peerID);
 typedef _CloseProxyDart = void Function(int handle, Pointer<Utf8> peerID);
 
+typedef _RescanC = Void Function(Int32 handle);
+typedef _RescanDart = void Function(int handle);
+
 typedef _MeshDiagC = Pointer<Utf8> Function(Int32 handle);
 typedef _MeshDiagDart = Pointer<Utf8> Function(int handle);
 
@@ -116,6 +119,7 @@ class PiperBindings {
   late final _OpenProxyDart openProxy;
   late final _CloseProxyDart closeProxy;
   late final _MeshDiagDart meshDiag;
+  late final _RescanDart rescan;
 
   PiperBindings({String? libraryPath}) {
     _lib = DynamicLibrary.open(libraryPath ?? _defaultLibPath());
@@ -170,6 +174,8 @@ class PiperBindings {
         .lookupFunction<_CloseProxyC, _CloseProxyDart>('PiperCloseProxy');
     meshDiag = _lib
         .lookupFunction<_MeshDiagC, _MeshDiagDart>('PiperMeshDiag');
+    rescan = _lib
+        .lookupFunction<_RescanC, _RescanDart>('PiperRescan');
   }
 
   static String _defaultLibPath() {
