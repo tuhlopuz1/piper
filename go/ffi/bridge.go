@@ -332,7 +332,7 @@ func PiperSetDownloadsDir(handle C.int, dir *C.char) {
 	e.node.SetDownloadsDir(C.GoString(dir))
 }
 
-// ─── DHT ─────────────────────────────────────────────────────────────────────
+// ─── DHT + BLE bootstrap ─────────────────────────────────────────────────────
 
 // PiperGetPeerTable returns the full DHT peer table as a JSON array of
 // {id, name, ip, port} objects. Use this to seed BLE / WiFi Direct payloads
@@ -347,6 +347,39 @@ func PiperGetPeerTable(handle C.int) *C.char {
 	records := e.node.PeerTable()
 	data, _ := json.Marshal(records)
 	return C.CString(string(data))
+}
+
+// PiperGetLocalInfo returns our own connection endpoint as a JSON object
+// {id, name, ip, port}. Dart/Flutter uses this to build the BLE advertisement
+// payload so peers in other subnets can find and TCP-connect to us.
+//
+//export PiperGetLocalInfo
+func PiperGetLocalInfo(handle C.int) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString("{}")
+	}
+	ep := e.node.LocalEndpoint()
+	data, _ := json.Marshal(ep)
+	return C.CString(string(data))
+}
+
+// PiperInjectPeers accepts a JSON array of {id, name, ip, port} records
+// discovered via BLE / WiFi Direct and feeds them into the Go discovery
+// pipeline exactly like mDNS/UDP peers.
+//
+//export PiperInjectPeers
+func PiperInjectPeers(handle C.int, recordsJSON *C.char) {
+	e := getEntry(handle)
+	if e == nil {
+		return
+	}
+	var records []core.PeerRecord
+	if err := json.Unmarshal([]byte(C.GoString(recordsJSON)), &records); err != nil {
+		log.Printf("[ffi] PiperInjectPeers unmarshal: %v", err)
+		return
+	}
+	e.node.InjectPeers(records)
 }
 
 // ─── Memory management ──────────────────────────────────────────────────────

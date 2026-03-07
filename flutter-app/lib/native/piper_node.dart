@@ -200,6 +200,48 @@ class PiperNode {
         .toList();
   }
 
+  // ─── DHT / BLE bootstrap ───────────────────────────────────────────────────
+
+  /// Returns our own TCP endpoint {id, name, ip, port} for BLE advertising.
+  /// Returns null if the node has no usable IPv4 address yet.
+  PeerRecord? localInfo() {
+    final ptr = _bindings.getLocalInfo(_handle);
+    final json = ptr.toDartString();
+    _bindings.freeString(ptr);
+    try {
+      final map = jsonDecode(json) as Map<String, dynamic>;
+      if (map.isEmpty || (map['ip'] as String? ?? '').isEmpty) return null;
+      return PeerRecord.fromJson(map);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Returns a snapshot of the full DHT peer table.
+  List<PeerRecord> get peerTable {
+    final ptr = _bindings.getPeerTable(_handle);
+    final json = ptr.toDartString();
+    _bindings.freeString(ptr);
+    try {
+      final list = jsonDecode(json) as List<dynamic>;
+      return list
+          .map((e) => PeerRecord.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Feed peers discovered via BLE / WiFi Direct into the Go discovery
+  /// pipeline. Go will attempt TCP connections to each of them.
+  void injectPeers(List<PeerRecord> records) {
+    if (records.isEmpty) return;
+    final json = jsonEncode(records.map((r) => r.toJson()).toList());
+    final ptr = json.toNativeUtf8();
+    _bindings.injectPeers(_handle, ptr);
+    malloc.free(ptr);
+  }
+
   /// Get a snapshot of all groups.
   List<GroupInfo> get groups {
     final ptr = _bindings.listGroups(_handle);

@@ -113,6 +113,38 @@ class PeerInfo {
   bool get isConnected => state == 'connected';
 }
 
+/// DHT peer record — mirrors Go's core.PeerRecord.
+/// Used for BLE / WiFi Direct peer exchange.
+class PeerRecord {
+  final String id;
+  final String name;
+  final String ip;
+  final int port;
+
+  const PeerRecord({
+    required this.id,
+    required this.name,
+    required this.ip,
+    required this.port,
+  });
+
+  factory PeerRecord.fromJson(Map<String, dynamic> json) {
+    return PeerRecord(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      ip: json['ip'] as String? ?? '',
+      port: json['port'] as int? ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'ip': ip,
+        'port': port,
+      };
+}
+
 class GroupInfo {
   final String id;
   final String name;

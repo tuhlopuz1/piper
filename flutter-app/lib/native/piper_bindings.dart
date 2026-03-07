@@ -67,6 +67,15 @@ typedef _SendCallSignalDart = Pointer<Utf8> Function(
     Pointer<Utf8> signalType,
     Pointer<Utf8> payload);
 
+typedef _GetPeerTableC = Pointer<Utf8> Function(Int32 handle);
+typedef _GetPeerTableDart = Pointer<Utf8> Function(int handle);
+
+typedef _GetLocalInfoC = Pointer<Utf8> Function(Int32 handle);
+typedef _GetLocalInfoDart = Pointer<Utf8> Function(int handle);
+
+typedef _InjectPeersC = Void Function(Int32 handle, Pointer<Utf8> recordsJSON);
+typedef _InjectPeersDart = void Function(int handle, Pointer<Utf8> recordsJSON);
+
 typedef _FreeStringC = Void Function(Pointer<Utf8> s);
 typedef _FreeStringDart = void Function(Pointer<Utf8> s);
 
@@ -91,6 +100,9 @@ class PiperBindings {
   late final _SetDownloadsDirDart setDownloadsDir;
   late final _SetNodeNameDart setNodeName;
   late final _SendCallSignalDart sendCallSignal;
+  late final _GetPeerTableDart getPeerTable;
+  late final _GetLocalInfoDart getLocalInfo;
+  late final _InjectPeersDart injectPeers;
   late final _FreeStringDart freeString;
 
   PiperBindings({String? libraryPath}) {
@@ -132,6 +144,12 @@ class PiperBindings {
         .lookupFunction<_SetNodeNameC, _SetNodeNameDart>('PiperSetNodeName');
     sendCallSignal = _lib
         .lookupFunction<_SendCallSignalC, _SendCallSignalDart>('PiperSendCallSignal');
+    getPeerTable = _lib
+        .lookupFunction<_GetPeerTableC, _GetPeerTableDart>('PiperGetPeerTable');
+    getLocalInfo = _lib
+        .lookupFunction<_GetLocalInfoC, _GetLocalInfoDart>('PiperGetLocalInfo');
+    injectPeers = _lib
+        .lookupFunction<_InjectPeersC, _InjectPeersDart>('PiperInjectPeers');
     freeString = _lib
         .lookupFunction<_FreeStringC, _FreeStringDart>('PiperFreeString');
   }

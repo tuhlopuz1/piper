@@ -9,6 +9,7 @@ import '../models/chat.dart';
 import '../models/message.dart';
 import '../native/piper_events.dart';
 import '../native/piper_node.dart';
+import 'ble_discovery_service.dart';
 import 'call_service.dart';
 import 'database_service.dart';
 import 'log_service.dart';
@@ -17,6 +18,7 @@ import 'log_service.dart';
 class PiperService extends ChangeNotifier {
   PiperNode? _node;
   StreamSubscription<PiperEvent>? _sub;
+  BleDiscoveryService? _ble;
 
   /// Non-null when Go library failed to load or node failed to start.
   String? initError;
@@ -93,6 +95,14 @@ class PiperService extends ChangeNotifier {
       _node!.setDownloadsDir(_downloadsDir);
       _node!.start();
       _sub = _node!.events.listen(_onEvent);
+
+      // BLE discovery: advertise our TCP endpoint and scan for peers in other
+      // subnets. Non-blocking — failures are logged and don't break the app.
+      if (BleDiscoveryService.isSupported) {
+        _ble = BleDiscoveryService(_node!);
+        _ble!.start();
+      }
+
       CallService.instance.init(_node!);
       await CallService.instance.loadDevicePreferences();
 
@@ -518,6 +528,7 @@ class PiperService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _ble?.stop();
     _sub?.cancel();
     _node?.stop();
     super.dispose();

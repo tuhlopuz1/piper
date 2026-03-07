@@ -1224,7 +1224,7 @@ func (n *Node) fastRedial(peerID string) {
 	go n.dialPeer(peerID, peerName, ep.ip, ep.port)
 }
 
-// ─── DHT / peer exchange ──────────────────────────────────────────────────────
+// ─── DHT / peer exchange + BLE bootstrap ─────────────────────────────────────
 
 // sendPeerExchange sends our full known-peer table to cn so it can discover
 // peers it hasn't seen yet. Called in a goroutine right after every handshake.
@@ -1282,6 +1282,61 @@ func (n *Node) handlePeerExchange(msg Message) {
 		// onDiscovered is idempotent — it skips peers already connected.
 		n.onDiscovered(rec.ID, rec.Name, ip, rec.Port)
 	}
+}
+
+// InjectPeers feeds externally discovered peers (e.g. via BLE or WiFi Direct)
+// directly into the discovery pipeline. Each record is treated identically to
+// a peer found via mDNS/UDP — the node will attempt a TCP connection.
+func (n *Node) InjectPeers(records []PeerRecord) {
+	for _, rec := range records {
+		if rec.ID == n.id || rec.ID == "" {
+			continue
+		}
+		ip := net.ParseIP(rec.IP)
+		if ip == nil || rec.Port <= 0 {
+			continue
+		}
+		n.onDiscovered(rec.ID, rec.Name, ip, rec.Port)
+	}
+}
+
+// LocalEndpoint returns our own connection info for advertising over BLE /
+// WiFi Direct so peers in other subnets can reach us via TCP.
+func (n *Node) LocalEndpoint() PeerRecord {
+	return PeerRecord{
+		ID:   n.id,
+		Name: n.name,
+		IP:   bestLocalIPv4(),
+		Port: n.port,
+	}
+}
+
+// bestLocalIPv4 returns the first non-loopback IPv4 address found on any
+// active interface, or empty string if none is available.
+func bestLocalIPv4() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ip4 := ipnet.IP.To4(); ip4 != nil && !ip4.IsLoopback() {
+				return ip4.String()
+			}
+		}
+	}
+	return ""
 }
 
 // PeerTable returns a snapshot of every peer endpoint this node has ever
