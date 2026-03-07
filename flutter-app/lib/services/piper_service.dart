@@ -17,6 +17,16 @@ import 'log_service.dart';
 
 /// Singleton service that owns the Go PiperNode and exposes observable state.
 class PiperService extends ChangeNotifier {
+  static const List<String> _voiceExts = [
+    'm4a',
+    'aac',
+    'mp3',
+    'wav',
+    'ogg',
+    'opus',
+    'webm',
+  ];
+
   PiperNode? _node;
   StreamSubscription<PiperEvent>? _sub;
   BleDiscoveryService? _ble;
@@ -288,16 +298,18 @@ class PiperService extends ChangeNotifier {
           : null;
 
       _messages.putIfAbsent(chatId, () => []);
+      final isVoice = _isVoiceFileName(e.fileName);
       final fileMsg = Message(
         id: e.transferId ?? '${DateTime.now().millisecondsSinceEpoch}',
         isMe: false,
         senderName: e.peerName,
         senderColor: colorForPeer(e.peerId ?? ''),
-        type: MsgType.file,
+        type: isVoice ? MsgType.voice : MsgType.file,
         fileName: e.fileName,
         fileExt: e.fileName?.split('.').last.toUpperCase(),
         fileSize: e.fileSize,
         filePath: filePath,
+        voiceDuration: isVoice ? _durationFromVoiceName(e.fileName) : null,
         time: DateTime.now(),
       );
       _messages[chatId]!.add(fileMsg);
@@ -337,20 +349,18 @@ class PiperService extends ChangeNotifier {
         return;
     }
 
-    if (systemText != null) {
-      _messages.putIfAbsent(chatId, () => []);
-      final msg = Message(
-        id: 'sys_${DateTime.now().millisecondsSinceEpoch}',
-        isMe: false,
-        senderName: null,
-        senderColor: null,
-        type: MsgType.text,
-        text: systemText,
-        time: DateTime.now(),
-      );
-      _messages[chatId]!.add(msg);
-      DatabaseService.instance.insertMessage(chatId, msg);
-    }
+    _messages.putIfAbsent(chatId, () => []);
+    final msg = Message(
+      id: 'sys_${DateTime.now().millisecondsSinceEpoch}',
+      isMe: false,
+      senderName: null,
+      senderColor: null,
+      type: MsgType.text,
+      text: systemText,
+      time: DateTime.now(),
+    );
+    _messages[chatId]!.add(msg);
+    DatabaseService.instance.insertMessage(chatId, msg);
   }
 
   // ── Messaging ─────────────────────────────────────────────────────────────
@@ -497,6 +507,95 @@ class PiperService extends ChangeNotifier {
     notifyListeners();
   }
 
+  void sendVoice(String peerId, String filePath, int durationSec) {
+    if (_node == null) return;
+
+    final name = _voiceFileName(filePath, durationSec);
+    int? size;
+    try {
+      size = File(filePath).statSync().size;
+    } catch (_) {}
+
+    final msgId = 'voice_${DateTime.now().millisecondsSinceEpoch}';
+
+    // Persist peer name so the peer appears even when offline.
+    final peerName = _peers
+        .where((p) => p.id == peerId)
+        .map((p) => p.displayName)
+        .firstOrNull;
+    if (peerName != null && peerName.isNotEmpty) {
+      _chatNames[peerId] = peerName;
+      DatabaseService.instance.upsertChatName(peerId, peerName);
+    }
+
+    _messages.putIfAbsent(peerId, () => []);
+    final outVoiceMsg = Message(
+      id: msgId,
+      isMe: true,
+      type: MsgType.voice,
+      fileName: name,
+      fileExt: name.split('.').last.toUpperCase(),
+      fileSize: size,
+      filePath: filePath,
+      voiceDuration: durationSec,
+      time: DateTime.now(),
+      delivered: false,
+    );
+    _messages[peerId]!.add(outVoiceMsg);
+    DatabaseService.instance.insertMessage(peerId, outVoiceMsg);
+
+    _pendingFiles[name] = (peerId, msgId);
+
+    try {
+      _node!.sendFile(peerId, filePath);
+    } catch (e) {
+      _pendingFiles.remove(name);
+      LogService.instance.error('[PiperService] sendVoice error: $e');
+    }
+
+    notifyListeners();
+  }
+
+  void sendVoiceToGroup(String groupId, String filePath, int durationSec) {
+    if (_node == null) return;
+
+    final name = _voiceFileName(filePath, durationSec);
+    int? size;
+    try {
+      size = File(filePath).statSync().size;
+    } catch (_) {}
+
+    final chatId = 'group:$groupId';
+    final msgId = 'voice_${DateTime.now().millisecondsSinceEpoch}';
+
+    _messages.putIfAbsent(chatId, () => []);
+    final outVoiceMsg = Message(
+      id: msgId,
+      isMe: true,
+      type: MsgType.voice,
+      fileName: name,
+      fileExt: name.split('.').last.toUpperCase(),
+      fileSize: size,
+      filePath: filePath,
+      voiceDuration: durationSec,
+      time: DateTime.now(),
+      delivered: false,
+    );
+    _messages[chatId]!.add(outVoiceMsg);
+    DatabaseService.instance.insertMessage(chatId, outVoiceMsg);
+
+    _pendingFiles[name] = (chatId, msgId);
+
+    try {
+      _node!.sendFileToGroup(groupId, filePath);
+    } catch (e) {
+      _pendingFiles.remove(name);
+      LogService.instance.error('[PiperService] sendVoiceToGroup error: $e');
+    }
+
+    notifyListeners();
+  }
+
   // ── Group management ──────────────────────────────────────────────────────
 
   String createGroup(String name) => _node?.createGroup(name) ?? '';
@@ -572,7 +671,7 @@ class PiperService extends ChangeNotifier {
       id: 'global',
       name: 'Общий чат',
       lastMessage: globalMsgs.isNotEmpty
-          ? (globalMsgs.last.text ?? '')
+          ? _chatPreview(globalMsgs.last)
           : 'Переписка со всеми в сети',
       lastMessageTime:
           globalMsgs.isNotEmpty ? globalMsgs.last.time : DateTime.now(),
@@ -603,7 +702,7 @@ class PiperService extends ChangeNotifier {
       result.add(Chat(
         id: peerId,
         name: name,
-        lastMessage: msgs.last.text ?? '',
+        lastMessage: _chatPreview(msgs.last),
         lastMessageTime: msgs.last.time,
         unreadCount: _unreadCounts[peerId] ?? 0,
         isGroup: false,
@@ -621,7 +720,7 @@ class PiperService extends ChangeNotifier {
       result.add(Chat(
         id: chatId,
         name: g.name,
-        lastMessage: msgs.isNotEmpty ? (msgs.last.text ?? '') : '',
+        lastMessage: msgs.isNotEmpty ? _chatPreview(msgs.last) : '',
         lastMessageTime: msgs.isNotEmpty ? msgs.last.time : DateTime.now(),
         unreadCount: _unreadCounts[chatId] ?? 0,
         isGroup: true,
@@ -645,5 +744,40 @@ class PiperService extends ChangeNotifier {
     _sub?.cancel();
     _node?.stop();
     super.dispose();
+  }
+
+  bool _isVoiceFileName(String? fileName) {
+    if (fileName == null || fileName.isEmpty) return false;
+    final dot = fileName.lastIndexOf('.');
+    if (dot <= 0 || dot == fileName.length - 1) return false;
+    final ext = fileName.substring(dot + 1).toLowerCase();
+    return _voiceExts.contains(ext);
+  }
+
+  String _voiceFileName(String filePath, int durationSec) {
+    final source = filePath.replaceAll(r'\', '/').split('/').last;
+    final dot = source.lastIndexOf('.');
+    final ext = dot > 0 ? source.substring(dot + 1).toLowerCase() : 'm4a';
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    return 'voice_${ts}_${durationSec}s.$ext';
+  }
+
+  int _durationFromVoiceName(String? fileName) {
+    if (fileName == null) return 0;
+    final match = RegExp(r'_(\d+)s(?:\.[^.]+)?$').firstMatch(fileName);
+    return int.tryParse(match?.group(1) ?? '') ?? 0;
+  }
+
+  String _chatPreview(Message message) {
+    switch (message.type) {
+      case MsgType.text:
+        return message.text ?? '';
+      case MsgType.file:
+        return 'Файл: ${message.fileName ?? ''}'.trim();
+      case MsgType.voice:
+        return 'Голосовое сообщение';
+      case MsgType.image:
+        return 'Изображение';
+    }
   }
 }

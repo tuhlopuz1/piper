@@ -28,6 +28,10 @@ dependencies:
   path_provider: ^2.1.4
   # Open files with native app
   open_file: ^3.3.2
+  # Record voice messages
+  record: ^5.2.0
+  # Play voice messages
+  audioplayers: ^6.1.0
   # WebRTC audio/video calls
   flutter_webrtc: ^1.3.1
   # Runtime permissions (camera, mic)
