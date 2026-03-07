@@ -1085,9 +1085,13 @@ class _TimeRow extends StatelessWidget {
         if (message.isMe) ...[
           const SizedBox(width: 3),
           Icon(
-            message.delivered ? Icons.done_all_rounded : Icons.done_rounded,
+            message.pending
+                ? Icons.access_time_rounded
+                : (message.delivered ? Icons.done_all_rounded : Icons.done_rounded),
             size: 12,
-            color: message.delivered ? fg : fg.withValues(alpha: 0.6),
+            color: message.pending
+                ? fg.withValues(alpha: 0.5)
+                : (message.delivered ? fg : fg.withValues(alpha: 0.6)),
           ),
         ],
       ],

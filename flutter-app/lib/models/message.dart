@@ -28,6 +28,8 @@ class Message {
 
   final DateTime time;
   final bool delivered;
+  /// True when the peer was offline at send time — message is queued locally.
+  final bool pending;
 
   const Message({
     required this.id,
@@ -45,6 +47,7 @@ class Message {
     this.voiceDuration,
     required this.time,
     this.delivered = true,
+    this.pending = false,
   });
 }
 

@@ -28,11 +28,6 @@ extern const char *_GoStringPtr(_GoString_ s);
 
 #line 1 "cgo-generated-wrapper"
 
-#line 3 "storage.go"
- #include <stdlib.h>
-
-#line 1 "cgo-generated-wrapper"
-
 
 /* End of preamble from import "C" comments.  */
 
@@ -117,11 +112,8 @@ extern void PiperInjectPeers(int handle, char* recordsJSON);
 extern int PiperOpenProxy(int handle, char* peerID, char* remoteIcePwd);
 extern void PiperCloseProxy(int handle, char* peerID);
 extern char* PiperMeshDiag(int handle);
-extern char* PiperDHTDiag(int handle);
 extern void PiperRescan(int handle);
 extern void PiperFreeString(char* s);
-extern char* PiperInit(int handle, char* storagePath);
-extern int PiperPendingCount(int handle, char* peerID);
 
 #ifdef __cplusplus
 }

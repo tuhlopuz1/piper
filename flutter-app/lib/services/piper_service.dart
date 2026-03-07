@@ -59,6 +59,10 @@ class PiperService extends ChangeNotifier {
   /// chatId → ordered list of messages (oldest first).
   final Map<String, List<Message>> _messages = {};
 
+  // ── Pending outgoing text messages (peer was offline) ─────────────────────
+  /// peerId → list of (msgId, text) queued while peer was offline.
+  final Map<String, List<(String, String)>> _pendingTextQueue = {};
+
   // ── Transfer progress tracking ─────────────────────────────────────────────
 
   /// msgId → progress (0.0–1.0) while the outgoing transfer is in flight.
@@ -197,6 +201,9 @@ class PiperService extends ChangeNotifier {
   void _onEvent(PiperEvent e) {
     if (e.type == 'peer') {
       _refresh();
+      if (e.peerState == 'joined' && e.peerId != null) {
+        _flushPendingQueue(e.peerId!);
+      }
       return;
     }
     if (e.type == 'group') {
@@ -438,11 +445,19 @@ class PiperService extends ChangeNotifier {
     if (_node == null) return;
 
     final String chatId;
+    bool isPending = false;
+
     if (groupId != null && groupId.isNotEmpty) {
       _node!.sendGroup(text, groupId);
       chatId = 'group:$groupId';
     } else if (toPeerId != null && toPeerId.isNotEmpty) {
-      _node!.send(text, toPeerID: toPeerId);
+      final peer = _peers.where((p) => p.id == toPeerId).firstOrNull;
+      if (peer?.isConnected == true) {
+        _node!.send(text, toPeerID: toPeerId);
+      } else {
+        // Peer is offline — queue the message.
+        isPending = true;
+      }
       chatId = toPeerId;
     } else {
       _node!.send(text);
@@ -461,16 +476,65 @@ class PiperService extends ChangeNotifier {
       }
     }
 
+    final msgId = '${DateTime.now().millisecondsSinceEpoch}';
     _messages.putIfAbsent(chatId, () => []);
     final outMsg = Message(
-      id: '${DateTime.now().millisecondsSinceEpoch}',
+      id: msgId,
       isMe: true,
       type: MsgType.text,
       text: text,
       time: DateTime.now(),
+      pending: isPending,
     );
     _messages[chatId]!.add(outMsg);
     DatabaseService.instance.insertMessage(chatId, outMsg);
+
+    if (isPending && toPeerId != null) {
+      _pendingTextQueue.putIfAbsent(toPeerId, () => []).add((msgId, text));
+    }
+
+    notifyListeners();
+  }
+
+  /// Called when a peer comes online — sends all queued messages.
+  void _flushPendingQueue(String peerId) {
+    final queue = _pendingTextQueue.remove(peerId);
+    if (queue == null || queue.isEmpty) return;
+
+    final msgs = _messages[peerId];
+    if (msgs == null) return;
+
+    for (final (msgId, text) in queue) {
+      try {
+        _node!.send(text, toPeerID: peerId);
+      } catch (e) {
+        LogService.instance.error('[PiperService] flush pending error: $e');
+        continue;
+      }
+      // Mark message as no longer pending.
+      final idx = msgs.indexWhere((m) => m.id == msgId);
+      if (idx >= 0) {
+        final old = msgs[idx];
+        msgs[idx] = Message(
+          id: old.id,
+          isMe: old.isMe,
+          senderName: old.senderName,
+          senderColor: old.senderColor,
+          type: old.type,
+          text: old.text,
+          imageColor: old.imageColor,
+          imageAspect: old.imageAspect,
+          fileName: old.fileName,
+          fileExt: old.fileExt,
+          fileSize: old.fileSize,
+          filePath: old.filePath,
+          voiceDuration: old.voiceDuration,
+          time: old.time,
+          delivered: old.delivered,
+          pending: false,
+        );
+      }
+    }
     notifyListeners();
   }
 
