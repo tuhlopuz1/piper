@@ -10,6 +10,7 @@ import '../models/message.dart';
 import '../native/piper_events.dart';
 import '../native/piper_node.dart';
 import 'ble_discovery_service.dart';
+import 'wifi_direct_service.dart';
 import 'call_service.dart';
 import 'database_service.dart';
 import 'log_service.dart';
@@ -19,6 +20,7 @@ class PiperService extends ChangeNotifier {
   PiperNode? _node;
   StreamSubscription<PiperEvent>? _sub;
   BleDiscoveryService? _ble;
+  WifiDirectService? _wifiDirect;
 
   /// Non-null when Go library failed to load or node failed to start.
   String? initError;
@@ -101,6 +103,11 @@ class PiperService extends ChangeNotifier {
       if (BleDiscoveryService.isSupported) {
         _ble = BleDiscoveryService(_node!);
         _ble!.start();
+      }
+
+      if (WifiDirectService.isSupported) {
+        _wifiDirect = WifiDirectService();
+        await _wifiDirect!.start(_node!);
       }
 
       CallService.instance.init(_node!);
@@ -532,6 +539,7 @@ class PiperService extends ChangeNotifier {
   @override
   void dispose() {
     _ble?.stop();
+    _wifiDirect?.stop();
     _sub?.cancel();
     _node?.stop();
     super.dispose();
