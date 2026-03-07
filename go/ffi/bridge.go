@@ -59,13 +59,17 @@ type ffiEvent struct {
 	Members        []string `json:"members,omitempty"`
 
 	// Transfer fields
-	TransferID    string `json:"transfer_id,omitempty"`
-	TransferKind  string `json:"transfer_kind,omitempty"` // "offered","started","progress","completed","failed"
-	FileName      string `json:"file_name,omitempty"`
-	FileSize      int64  `json:"file_size,omitempty"`
-	Sending       bool   `json:"sending,omitempty"`
-	Progress      int64  `json:"progress,omitempty"`
-	TransferError string `json:"transfer_error,omitempty"`
+	TransferID     string `json:"transfer_id,omitempty"`
+	TransferKind   string `json:"transfer_kind,omitempty"` // "offered","started","progress","completed","failed"
+	FileName       string `json:"file_name,omitempty"`
+	FileSize       int64  `json:"file_size,omitempty"`
+	Sending        bool   `json:"sending,omitempty"`
+	Progress       int64  `json:"progress,omitempty"`
+	TransferError  string `json:"transfer_error,omitempty"`
+	AttachmentID   string `json:"attachment_id,omitempty"`
+	AttachmentKind string `json:"attachment_kind,omitempty"`
+	MimeType       string `json:"mime_type,omitempty"`
+	VoiceDuration  int    `json:"voice_duration,omitempty"`
 }
 
 type ffiPeer struct {
@@ -191,6 +195,31 @@ func PiperSendFileToGroup(handle C.int, groupID, filePath *C.char) *C.char {
 		return C.CString("invalid handle")
 	}
 	_, err := e.node.SendFileToGroup(C.GoString(groupID), C.GoString(filePath))
+	if err != nil {
+		return C.CString(err.Error())
+	}
+	return nil
+}
+
+//export PiperSendVoice
+func PiperSendVoice(handle C.int, peerID, filePath *C.char, durationSec C.int) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString("invalid handle")
+	}
+	if err := e.node.SendVoice(C.GoString(peerID), C.GoString(filePath), int(durationSec)); err != nil {
+		return C.CString(err.Error())
+	}
+	return nil
+}
+
+//export PiperSendVoiceToGroup
+func PiperSendVoiceToGroup(handle C.int, groupID, filePath *C.char, durationSec C.int) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString("invalid handle")
+	}
+	_, err := e.node.SendVoiceToGroup(C.GoString(groupID), C.GoString(filePath), int(durationSec))
 	if err != nil {
 		return C.CString(err.Error())
 	}
@@ -552,6 +581,10 @@ func convertEvent(ev core.Event, node *core.Node) ffiEvent {
 		f.Sending = t.Sending
 		f.Progress = t.Progress
 		f.TransferError = t.Err
+		f.AttachmentID = t.AttachmentID
+		f.AttachmentKind = t.AttachmentKind
+		f.MimeType = t.MimeType
+		f.VoiceDuration = t.VoiceDuration
 		switch ev.Transfer.Kind {
 		case core.TransferOffered:
 			f.TransferKind = "offered"

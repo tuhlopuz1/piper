@@ -13,6 +13,56 @@ import 'call_service.dart';
 import 'database_service.dart';
 import 'log_service.dart';
 
+class PiperUserError {
+  final String message;
+  final String? chatId;
+
+  const PiperUserError(this.message, {this.chatId});
+}
+
+class _PendingAttachmentCandidate {
+  final String chatId;
+  final String msgId;
+  final String fileName;
+  final int? fileSize;
+  final String attachmentKind;
+  final int? voiceDuration;
+  final int expectedTransfers;
+
+  const _PendingAttachmentCandidate({
+    required this.chatId,
+    required this.msgId,
+    required this.fileName,
+    required this.fileSize,
+    required this.attachmentKind,
+    required this.voiceDuration,
+    required this.expectedTransfers,
+  });
+}
+
+class _OutgoingAttachmentTracker {
+  final String chatId;
+  final String msgId;
+  final int expectedTransfers;
+  final int fileSize;
+  String? attachmentId;
+  final Map<String, int> progressByTransferId = {};
+  final Set<String> completedTransferIds = {};
+  final Set<String> failedTransferIds = {};
+  bool errorNotified = false;
+
+  _OutgoingAttachmentTracker({
+    required this.chatId,
+    required this.msgId,
+    required this.expectedTransfers,
+    required this.fileSize,
+    this.attachmentId,
+  });
+
+  int get resolvedTransfers =>
+      completedTransferIds.length + failedTransferIds.length;
+}
+
 /// Singleton service that owns the Go PiperNode and exposes observable state.
 class PiperService extends ChangeNotifier {
   PiperNode? _node;
@@ -41,10 +91,13 @@ class PiperService extends ChangeNotifier {
   final Map<String, double> _progressByMsgId = {};
   Map<String, double> get progressByMsgId => _progressByMsgId;
 
-  // fileName → (chatId, msgId): links a pending outgoing file to its optimistic message.
-  final Map<String, (String, String)> _pendingFiles = {};
-  // transferId → msgId
-  final Map<String, String> _transferToMsgId = {};
+  final StreamController<PiperUserError> _userErrors =
+      StreamController<PiperUserError>.broadcast();
+  Stream<PiperUserError> get userErrors => _userErrors.stream;
+
+  final Map<String, List<_PendingAttachmentCandidate>> _pendingAttachments = {};
+  final Map<String, _OutgoingAttachmentTracker> _outgoingAttachments = {};
+  final Map<String, String> _transferToAttachmentId = {};
   // dedup: incoming transfer IDs already shown as a bubble
   final Set<String> _processedIncomingTransfers = {};
 
@@ -117,7 +170,8 @@ class PiperService extends ChangeNotifier {
             _callHistory.add(CallRecord(
               peerId: entry.key,
               peerName: msg.senderName ?? _chatNames[entry.key] ?? entry.key,
-              direction: msg.isMe ? CallDirection.outgoing : CallDirection.incoming,
+              direction:
+                  msg.isMe ? CallDirection.outgoing : CallDirection.incoming,
               isVideo: msg.callIsVideo ?? false,
               durationSeconds: msg.callDuration ?? 0,
               answered: msg.callResult == CallResult.answered,
@@ -231,13 +285,7 @@ class PiperService extends ChangeNotifier {
     _messages[chatId]!.add(msg);
 
     // Persist name for DM chats so offline peers can still be shown.
-    if (e.peerName != null &&
-        e.peerName!.isNotEmpty &&
-        !chatId.startsWith('group:') &&
-        chatId != 'global') {
-      _chatNames[chatId] = e.peerName!;
-      DatabaseService.instance.upsertChatName(chatId, e.peerName!);
-    }
+    _persistChatName(chatId, e.peerName);
 
     // Persist and track unread.
     DatabaseService.instance.insertMessage(chatId, msg);
@@ -249,72 +297,252 @@ class PiperService extends ChangeNotifier {
 
   void _handleTransfer(PiperEvent e) {
     final tid = e.transferId ?? '';
+    final chatId = _chatIdForTransfer(e);
+    if (chatId.isEmpty) return;
 
     if (e.sending == true) {
-      // ── Outgoing transfer ──────────────────────────────────────────────────
-      switch (e.transferKind) {
-        case 'offered':
-          final key = e.fileName ?? '';
-          if (_pendingFiles.containsKey(key)) {
-            final (_, msgId) = _pendingFiles.remove(key)!;
-            _transferToMsgId[tid] = msgId;
-            _progressByMsgId[msgId] = 0.0;
-            notifyListeners();
-          }
-
-        case 'progress':
-          final msgId = _transferToMsgId[tid];
-          if (msgId != null && (e.fileSize ?? 0) > 0) {
-            _progressByMsgId[msgId] = (e.progress ?? 0) / e.fileSize!;
-            notifyListeners();
-          }
-
-        case 'completed':
-          final msgId = _transferToMsgId.remove(tid);
-          if (msgId != null) _progressByMsgId.remove(msgId);
-          notifyListeners();
-
-        case 'failed':
-          final msgId = _transferToMsgId.remove(tid);
-          if (msgId != null) _progressByMsgId.remove(msgId);
-          notifyListeners();
-      }
-    } else {
-      // ── Incoming transfer ──────────────────────────────────────────────────
-      if (e.transferKind != 'completed') return;
-      if (tid.isEmpty || !_processedIncomingTransfers.add(tid)) return;
-      final chatId = e.groupId?.isNotEmpty == true
-          ? 'group:${e.groupId}'
-          : (e.peerId ?? '');
-      if (chatId.isEmpty) return;
-
-      final filePath = e.fileName != null
-          ? '$_downloadsDir${Platform.pathSeparator}${e.fileName}'
-          : null;
-
-      _messages.putIfAbsent(chatId, () => []);
-      final fileMsg = Message(
-        id: e.transferId ?? '${DateTime.now().millisecondsSinceEpoch}',
-        isMe: false,
-        senderName: e.peerName,
-        senderColor: colorForPeer(e.peerId ?? ''),
-        type: MsgType.file,
-        fileName: e.fileName,
-        fileExt: e.fileName?.split('.').last.toUpperCase(),
-        fileSize: e.fileSize,
-        filePath: filePath,
-        time: DateTime.now(),
-      );
-      _messages[chatId]!.add(fileMsg);
-
-      // Persist and track unread.
-      DatabaseService.instance.insertMessage(chatId, fileMsg);
-      if (currentChatId != chatId) {
-        _unreadCounts[chatId] = (_unreadCounts[chatId] ?? 0) + 1;
-        DatabaseService.instance.incrementUnread(chatId);
-      }
-      notifyListeners();
+      _handleOutgoingTransfer(e, chatId);
+      return;
     }
+
+    if (e.transferKind != 'completed') return;
+    if (tid.isEmpty || !_processedIncomingTransfers.add(tid)) return;
+
+    final attachmentKind = _attachmentKindForEvent(e);
+    final filePath = e.fileName == null
+        ? null
+        : '$_downloadsDir${Platform.pathSeparator}${e.fileName}';
+    final msg = Message(
+      id: tid,
+      isMe: false,
+      senderName: e.peerName,
+      senderColor: colorForPeer(e.peerId ?? ''),
+      type: attachmentKind == 'voice' ? MsgType.voice : MsgType.file,
+      fileName: e.fileName,
+      fileExt: attachmentKind == 'voice'
+          ? null
+          : e.fileName?.split('.').last.toUpperCase(),
+      fileSize: e.fileSize,
+      filePath: filePath,
+      voiceDuration: e.voiceDuration,
+      time: DateTime.now(),
+    );
+
+    _messages.putIfAbsent(chatId, () => []);
+    _messages[chatId]!.add(msg);
+    _persistChatName(chatId, e.peerName);
+    DatabaseService.instance.insertMessage(chatId, msg);
+    if (currentChatId != chatId) {
+      _unreadCounts[chatId] = (_unreadCounts[chatId] ?? 0) + 1;
+      DatabaseService.instance.incrementUnread(chatId);
+    }
+    notifyListeners();
+  }
+
+  String _chatIdForTransfer(PiperEvent e) {
+    if (e.groupId?.isNotEmpty == true) {
+      return 'group:${e.groupId}';
+    }
+    return e.peerId ?? '';
+  }
+
+  String _attachmentKindForEvent(PiperEvent e) {
+    return e.attachmentKind == 'voice' ? 'voice' : 'file';
+  }
+
+  void _handleOutgoingTransfer(PiperEvent e, String chatId) {
+    final tracker = _resolveOutgoingAttachmentTracker(e, chatId);
+    if (tracker == null) return;
+
+    final transferId = e.transferId ?? '';
+    final attachmentId = tracker.attachmentId;
+    if (transferId.isNotEmpty && attachmentId != null) {
+      _transferToAttachmentId[transferId] = attachmentId;
+    }
+
+    final perTransferSize =
+        tracker.fileSize > 0 ? tracker.fileSize : (e.fileSize ?? 0);
+
+    final transferKind = e.transferKind;
+    if (transferKind == 'offered' || transferKind == 'started') {
+      if (transferId.isNotEmpty) {
+        tracker.progressByTransferId.putIfAbsent(transferId, () => 0);
+      }
+    } else if (transferKind == 'progress') {
+      if (transferId.isNotEmpty) {
+        tracker.progressByTransferId[transferId] = e.progress ?? 0;
+      }
+    } else if (transferKind == 'completed') {
+      if (transferId.isNotEmpty) {
+        tracker.progressByTransferId[transferId] = perTransferSize;
+        tracker.completedTransferIds.add(transferId);
+      }
+    } else if (transferKind == 'failed') {
+      if (transferId.isNotEmpty) {
+        tracker.progressByTransferId
+            .putIfAbsent(transferId, () => e.progress ?? 0);
+        tracker.failedTransferIds.add(transferId);
+      }
+      if (!tracker.errorNotified) {
+        tracker.errorNotified = true;
+        _emitAttachmentError(chatId, _attachmentKindForEvent(e));
+      }
+    }
+
+    final expectedTransfers = tracker.expectedTransfers > 0
+        ? tracker.expectedTransfers
+        : (tracker.progressByTransferId.isNotEmpty
+            ? tracker.progressByTransferId.length
+            : 1);
+    final totalBytes = perTransferSize * expectedTransfers;
+    final sentBytes = tracker.progressByTransferId.values
+        .fold<int>(0, (sum, value) => sum + value);
+    if (tracker.resolvedTransfers >= expectedTransfers) {
+      _progressByMsgId.remove(tracker.msgId);
+    } else if (totalBytes > 0) {
+      _progressByMsgId[tracker.msgId] =
+          (sentBytes / totalBytes).clamp(0.0, 1.0);
+    }
+
+    if (tracker.failedTransferIds.isEmpty &&
+        tracker.completedTransferIds.length >= expectedTransfers) {
+      _progressByMsgId.remove(tracker.msgId);
+      _setMessageDelivered(chatId, tracker.msgId, delivered: true);
+      DatabaseService.instance.markDelivered(tracker.msgId);
+      _cleanupOutgoingAttachmentTracker(tracker);
+    } else if (tracker.resolvedTransfers >= expectedTransfers &&
+        tracker.failedTransferIds.isNotEmpty) {
+      _progressByMsgId.remove(tracker.msgId);
+      _cleanupOutgoingAttachmentTracker(tracker);
+    }
+
+    notifyListeners();
+  }
+
+  _OutgoingAttachmentTracker? _resolveOutgoingAttachmentTracker(
+    PiperEvent e,
+    String chatId,
+  ) {
+    final attachmentId = e.attachmentId;
+    if (attachmentId != null && attachmentId.isNotEmpty) {
+      final existing = _outgoingAttachments[attachmentId];
+      if (existing != null) {
+        return existing;
+      }
+    }
+
+    final transferId = e.transferId;
+    if (transferId != null && transferId.isNotEmpty) {
+      final mappedAttachmentId = _transferToAttachmentId[transferId];
+      if (mappedAttachmentId != null) {
+        return _outgoingAttachments[mappedAttachmentId];
+      }
+    }
+
+    final fileName = e.fileName;
+    if (fileName == null || fileName.isEmpty) return null;
+
+    final lookupKey = _pendingAttachmentLookupKey(
+      chatId: chatId,
+      fileName: fileName,
+      attachmentKind: _attachmentKindForEvent(e),
+      voiceDuration: e.voiceDuration,
+    );
+    final queue = _pendingAttachments[lookupKey];
+    if (queue == null || queue.isEmpty) return null;
+
+    final pending = queue.removeAt(0);
+    if (queue.isEmpty) {
+      _pendingAttachments.remove(lookupKey);
+    }
+
+    final resolvedAttachmentId =
+        (attachmentId != null && attachmentId.isNotEmpty)
+            ? attachmentId
+            : 'legacy:${transferId ?? pending.msgId}';
+    final tracker = _OutgoingAttachmentTracker(
+      chatId: pending.chatId,
+      msgId: pending.msgId,
+      expectedTransfers: pending.expectedTransfers,
+      fileSize: pending.fileSize ?? (e.fileSize ?? 0),
+      attachmentId: resolvedAttachmentId,
+    );
+    _outgoingAttachments[resolvedAttachmentId] = tracker;
+    return tracker;
+  }
+
+  String _pendingAttachmentLookupKey({
+    required String chatId,
+    required String fileName,
+    required String attachmentKind,
+    required int? voiceDuration,
+  }) {
+    return '$chatId|$attachmentKind|$fileName|${voiceDuration ?? 0}';
+  }
+
+  void _registerPendingAttachment(_PendingAttachmentCandidate candidate) {
+    final key = _pendingAttachmentLookupKey(
+      chatId: candidate.chatId,
+      fileName: candidate.fileName,
+      attachmentKind: candidate.attachmentKind,
+      voiceDuration: candidate.voiceDuration,
+    );
+    _pendingAttachments.putIfAbsent(key, () => []).add(candidate);
+  }
+
+  void _removePendingAttachment(_PendingAttachmentCandidate candidate) {
+    final key = _pendingAttachmentLookupKey(
+      chatId: candidate.chatId,
+      fileName: candidate.fileName,
+      attachmentKind: candidate.attachmentKind,
+      voiceDuration: candidate.voiceDuration,
+    );
+    final queue = _pendingAttachments[key];
+    if (queue == null) return;
+    queue.removeWhere((item) => item.msgId == candidate.msgId);
+    if (queue.isEmpty) {
+      _pendingAttachments.remove(key);
+    }
+  }
+
+  void _cleanupOutgoingAttachmentTracker(_OutgoingAttachmentTracker tracker) {
+    final attachmentId = tracker.attachmentId;
+    if (attachmentId != null) {
+      _outgoingAttachments.remove(attachmentId);
+      _transferToAttachmentId.removeWhere((_, value) => value == attachmentId);
+    }
+  }
+
+  void _emitAttachmentError(String chatId, String attachmentKind) {
+    final message = attachmentKind == 'voice'
+        ? 'Не удалось отправить голосовое сообщение'
+        : 'Не удалось отправить файл';
+    _userErrors.add(PiperUserError(message, chatId: chatId));
+  }
+
+  void _persistChatName(String chatId, String? peerName) {
+    if (peerName == null ||
+        peerName.isEmpty ||
+        chatId.startsWith('group:') ||
+        chatId == 'global') {
+      return;
+    }
+    _chatNames[chatId] = peerName;
+    DatabaseService.instance.upsertChatName(chatId, peerName);
+  }
+
+  void _setMessageDelivered(
+    String chatId,
+    String msgId, {
+    required bool delivered,
+  }) {
+    final list = _messages[chatId];
+    if (list == null) return;
+    final index = list.indexWhere((message) => message.id == msgId);
+    if (index == -1) return;
+    final updated = list[index].copyWith(delivered: delivered);
+    list[index] = updated;
+    DatabaseService.instance.insertMessage(chatId, updated);
   }
 
   // ── Call history ────────────────────────────────────────────────────────────
@@ -381,10 +609,7 @@ class PiperService extends ChangeNotifier {
           .where((p) => p.id == toPeerId)
           .map((p) => p.displayName)
           .firstOrNull;
-      if (peerName != null && peerName.isNotEmpty) {
-        _chatNames[toPeerId] = peerName;
-        DatabaseService.instance.upsertChatName(toPeerId, peerName);
-      }
+      _persistChatName(toPeerId, peerName);
     }
 
     _messages.putIfAbsent(chatId, () => []);
@@ -401,58 +626,136 @@ class PiperService extends ChangeNotifier {
   }
 
   void sendFile(String peerId, String filePath) {
+    _sendAttachment(
+      attachmentKind: 'file',
+      filePath: filePath,
+      toPeerId: peerId,
+    );
+  }
+
+  void sendVoice({
+    String? toPeerId,
+    String? groupId,
+    required String filePath,
+    required int durationSec,
+  }) {
+    if ((toPeerId == null || toPeerId.isEmpty) &&
+        (groupId == null || groupId.isEmpty)) {
+      _userErrors.add(const PiperUserError(
+        'Голосовые сообщения в общий чат не поддерживаются',
+        chatId: 'global',
+      ));
+      return;
+    }
+    _sendAttachment(
+      attachmentKind: 'voice',
+      filePath: filePath,
+      toPeerId: toPeerId,
+      groupId: groupId,
+      voiceDuration: durationSec,
+    );
+  }
+
+  void _sendAttachment({
+    required String attachmentKind,
+    required String filePath,
+    String? toPeerId,
+    String? groupId,
+    int? voiceDuration,
+  }) {
     if (_node == null) return;
 
-    // Extract file name (handle both separators).
+    final chatId = groupId != null && groupId.isNotEmpty
+        ? 'group:$groupId'
+        : (toPeerId ?? '');
+    if (chatId.isEmpty) return;
+
     final name = filePath
         .replaceAll(r'\', '/')
         .split('/')
-        .lastWhere((p) => p.isNotEmpty, orElse: () => 'file');
-    final ext = name.contains('.') ? name.split('.').last.toUpperCase() : null;
+        .lastWhere((part) => part.isNotEmpty, orElse: () => 'file');
+    final ext = attachmentKind == 'voice'
+        ? null
+        : (name.contains('.') ? name.split('.').last.toUpperCase() : null);
 
     int? size;
     try {
       size = File(filePath).statSync().size;
     } catch (_) {}
 
-    final msgId = 'file_${DateTime.now().millisecondsSinceEpoch}';
-
-    // Persist peer name so the peer appears even when offline.
-    final peerName = _peers
-        .where((p) => p.id == peerId)
-        .map((p) => p.displayName)
-        .firstOrNull;
-    if (peerName != null && peerName.isNotEmpty) {
-      _chatNames[peerId] = peerName;
-      DatabaseService.instance.upsertChatName(peerId, peerName);
+    if (toPeerId != null && toPeerId.isNotEmpty) {
+      final peerName = _peers
+          .where((peer) => peer.id == toPeerId)
+          .map((peer) => peer.displayName)
+          .firstOrNull;
+      _persistChatName(toPeerId, peerName);
     }
 
-    _messages.putIfAbsent(peerId, () => []);
-    final outFileMsg = Message(
+    final msgId = '${attachmentKind}_${DateTime.now().millisecondsSinceEpoch}';
+    final outMsg = Message(
       id: msgId,
       isMe: true,
-      type: MsgType.file,
+      type: attachmentKind == 'voice' ? MsgType.voice : MsgType.file,
       fileName: name,
       fileExt: ext,
       fileSize: size,
       filePath: filePath,
+      voiceDuration: voiceDuration,
       time: DateTime.now(),
       delivered: false,
     );
-    _messages[peerId]!.add(outFileMsg);
-    DatabaseService.instance.insertMessage(peerId, outFileMsg);
 
-    // Track so we can link to transferId when the 'offered' event arrives.
-    _pendingFiles[name] = (peerId, msgId);
+    _messages.putIfAbsent(chatId, () => []);
+    _messages[chatId]!.add(outMsg);
+    DatabaseService.instance.insertMessage(chatId, outMsg);
+
+    final candidate = _PendingAttachmentCandidate(
+      chatId: chatId,
+      msgId: msgId,
+      fileName: name,
+      fileSize: size,
+      attachmentKind: attachmentKind,
+      voiceDuration: voiceDuration,
+      expectedTransfers: groupId != null && groupId.isNotEmpty
+          ? _expectedGroupTransferCount(groupId)
+          : 1,
+    );
+    _registerPendingAttachment(candidate);
 
     try {
-      _node!.sendFile(peerId, filePath);
+      if (groupId != null && groupId.isNotEmpty) {
+        if (attachmentKind == 'voice') {
+          _node!.sendVoiceToGroup(
+            groupId,
+            filePath,
+            durationSec: voiceDuration ?? 0,
+          );
+        } else {
+          _node!.sendFileToGroup(groupId, filePath);
+        }
+      } else if (attachmentKind == 'voice') {
+        _node!.sendVoice(
+          toPeerId!,
+          filePath,
+          durationSec: voiceDuration ?? 0,
+        );
+      } else {
+        _node!.sendFile(toPeerId!, filePath);
+      }
     } catch (e) {
-      _pendingFiles.remove(name);
-      LogService.instance.error('[PiperService] sendFile error: $e');
+      _removePendingAttachment(candidate);
+      LogService.instance.error('[PiperService] sendAttachment error: $e');
+      _emitAttachmentError(chatId, attachmentKind);
     }
 
     notifyListeners();
+  }
+
+  int _expectedGroupTransferCount(String groupId) {
+    final group = _groups.where((item) => item.id == groupId).firstOrNull;
+    if (group == null) return 1;
+    final count = group.members.where((memberId) => memberId != myId).length;
+    return count > 0 ? count : 1;
   }
 
   // ── Group management ──────────────────────────────────────────────────────
@@ -493,6 +796,38 @@ class PiperService extends ChangeNotifier {
     return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
   }
 
+  String _chatPreviewText(Message? message, {required String emptyText}) {
+    if (message == null) return emptyText;
+    switch (message.type) {
+      case MsgType.text:
+        return message.text ?? '';
+      case MsgType.image:
+        return 'Фото';
+      case MsgType.file:
+        return message.fileName ?? 'Файл';
+      case MsgType.voice:
+        return 'Голосовое';
+      case MsgType.call:
+        return 'Звонок';
+    }
+  }
+
+  MessageType _chatPreviewType(Message? message) {
+    if (message == null) return MessageType.text;
+    switch (message.type) {
+      case MsgType.text:
+        return MessageType.text;
+      case MsgType.image:
+        return MessageType.photo;
+      case MsgType.file:
+        return MessageType.file;
+      case MsgType.voice:
+        return MessageType.voice;
+      case MsgType.call:
+        return MessageType.call;
+    }
+  }
+
   List<Contact> get contacts => _peers
       .map((p) => Contact(
             id: p.id,
@@ -509,28 +844,30 @@ class PiperService extends ChangeNotifier {
       .toList();
 
   /// Returns the mesh topology data for the graph widget.
-  Map<String, dynamic> get topology => _node?.getTopology() ?? {'nodes': [], 'edges': []};
+  Map<String, dynamic> get topology =>
+      _node?.getTopology() ?? {'nodes': [], 'edges': []};
 
   List<Chat> get chats {
     final result = <Chat>[];
 
     // ── Global chat (always shown) ────────────────────────────────────────────
     final globalMsgs = _messages['global'] ?? [];
+    final globalLastMessage = globalMsgs.isNotEmpty ? globalMsgs.last : null;
     final onlinePeers = _peers.where((p) => p.isConnected).length;
     result.add(Chat(
       id: 'global',
       name: 'Общий чат',
-      lastMessage: globalMsgs.isNotEmpty
-          ? (globalMsgs.last.text ?? '')
-          : 'Переписка со всеми в сети',
-      lastMessageTime:
-          globalMsgs.isNotEmpty ? globalMsgs.last.time : DateTime.now(),
+      lastMessage: _chatPreviewText(
+        globalLastMessage,
+        emptyText: 'Переписка со всеми в сети',
+      ),
+      lastMessageTime: globalLastMessage?.time ?? DateTime.now(),
       unreadCount: _unreadCounts['global'] ?? 0,
       isGroup: true,
       avatarStyle: AvatarStyle.emerald,
       initials: '#',
       isOnline: onlinePeers > 0,
-      lastMessageType: MessageType.text,
+      lastMessageType: _chatPreviewType(globalLastMessage),
       memberCount: onlinePeers + 1,
     ));
 
@@ -549,17 +886,18 @@ class PiperService extends ChangeNotifier {
       final livePeer = onlinePeerMap[peerId];
       final name = livePeer?.displayName ?? _chatNames[peerId] ?? peerId;
 
+      final lastMessage = msgs.last;
       result.add(Chat(
         id: peerId,
         name: name,
-        lastMessage: msgs.last.text ?? '',
-        lastMessageTime: msgs.last.time,
+        lastMessage: _chatPreviewText(lastMessage, emptyText: ''),
+        lastMessageTime: lastMessage.time,
         unreadCount: _unreadCounts[peerId] ?? 0,
         isGroup: false,
         avatarStyle: avatarStyleForPeer(peerId),
         initials: initialsFor(name),
         isOnline: livePeer?.isConnected ?? false,
-        lastMessageType: MessageType.text,
+        lastMessageType: _chatPreviewType(lastMessage),
       ));
     }
 
@@ -567,17 +905,18 @@ class PiperService extends ChangeNotifier {
     for (final g in _groups) {
       final chatId = 'group:${g.id}';
       final msgs = _messages[chatId] ?? [];
+      final lastMessage = msgs.isNotEmpty ? msgs.last : null;
       result.add(Chat(
         id: chatId,
         name: g.name,
-        lastMessage: msgs.isNotEmpty ? (msgs.last.text ?? '') : '',
-        lastMessageTime: msgs.isNotEmpty ? msgs.last.time : DateTime.now(),
+        lastMessage: _chatPreviewText(lastMessage, emptyText: ''),
+        lastMessageTime: lastMessage?.time ?? DateTime.now(),
         unreadCount: _unreadCounts[chatId] ?? 0,
         isGroup: true,
         avatarStyle: AvatarStyle.indigo,
         initials: initialsFor(g.name),
         isOnline: false,
-        lastMessageType: MessageType.text,
+        lastMessageType: _chatPreviewType(lastMessage),
         memberCount: g.members.length,
       ));
     }
@@ -590,6 +929,7 @@ class PiperService extends ChangeNotifier {
   @override
   void dispose() {
     _sub?.cancel();
+    _userErrors.close();
     _node?.stop();
     super.dispose();
   }

@@ -47,6 +47,11 @@ const (
 	MsgTypePeerAnnounce MsgType = "peer_announce" // relay: advertise a peer reachable via this node
 )
 
+const (
+	AttachmentKindFile  = "file"
+	AttachmentKindVoice = "voice"
+)
+
 // Message is the top-level protocol envelope exchanged between peers.
 // Wire format: 4-byte big-endian uint32 length prefix + JSON body.
 type Message struct {
@@ -63,12 +68,16 @@ type Message struct {
 	Members   []string `json:"members,omitempty"`    // current member IDs (GroupInvite)
 
 	// File transfer fields
-	FileName   string `json:"file_name,omitempty"`   // original file name
-	FileSize   int64  `json:"file_size,omitempty"`   // total file size in bytes
-	FileHash   string `json:"file_hash,omitempty"`   // SHA-256 hex digest (FileDone)
-	TransferID string `json:"transfer_id,omitempty"` // unique transfer identifier
-	ChunkSeq   int    `json:"chunk_seq,omitempty"`   // chunk sequence number
-	ChunkData  []byte `json:"chunk_data,omitempty"`  // encrypted chunk data (auto-base64 in JSON)
+	FileName       string `json:"file_name,omitempty"`       // original file name
+	FileSize       int64  `json:"file_size,omitempty"`       // total file size in bytes
+	FileHash       string `json:"file_hash,omitempty"`       // SHA-256 hex digest (FileDone)
+	TransferID     string `json:"transfer_id,omitempty"`     // unique transfer identifier
+	AttachmentID   string `json:"attachment_id,omitempty"`   // shared attachment identifier across transfers
+	AttachmentKind string `json:"attachment_kind,omitempty"` // "file" or "voice"
+	MimeType       string `json:"mime_type,omitempty"`       // attachment MIME type
+	VoiceDuration  int    `json:"voice_duration,omitempty"`  // attachment duration in seconds
+	ChunkSeq       int    `json:"chunk_seq,omitempty"`       // chunk sequence number
+	ChunkData      []byte `json:"chunk_data,omitempty"`      // encrypted chunk data (auto-base64 in JSON)
 
 	// Mesh routing fields
 	TTL     int      `json:"ttl,omitempty"`      // remaining hops; each relay decrements

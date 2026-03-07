@@ -141,6 +141,36 @@ class PiperNode {
     }
   }
 
+  /// Send a voice attachment to a single peer. Throws on error.
+  void sendVoice(String peerID, String filePath, {required int durationSec}) {
+    final pidPtr = peerID.toNativeUtf8();
+    final pathPtr = filePath.toNativeUtf8();
+    final errPtr = _bindings.sendVoice(_handle, pidPtr, pathPtr, durationSec);
+    malloc.free(pidPtr);
+    malloc.free(pathPtr);
+    if (errPtr != nullptr) {
+      final err = errPtr.toDartString();
+      _bindings.freeString(errPtr);
+      throw Exception('SendVoice failed: $err');
+    }
+  }
+
+  /// Send a voice attachment to all members of a group. Throws on error.
+  void sendVoiceToGroup(String groupID, String filePath,
+      {required int durationSec}) {
+    final gidPtr = groupID.toNativeUtf8();
+    final pathPtr = filePath.toNativeUtf8();
+    final errPtr =
+        _bindings.sendVoiceToGroup(_handle, gidPtr, pathPtr, durationSec);
+    malloc.free(gidPtr);
+    malloc.free(pathPtr);
+    if (errPtr != nullptr) {
+      final err = errPtr.toDartString();
+      _bindings.freeString(errPtr);
+      throw Exception('SendVoiceToGroup failed: $err');
+    }
+  }
+
   // ─── Call signaling ────────────────────────────────────────────────────────
 
   /// Send a call signal (offer/answer/ice/reject/end) to a peer. Throws on error.
@@ -148,7 +178,8 @@ class PiperNode {
     final peerPtr = toPeerId.toNativeUtf8();
     final typePtr = signalType.toNativeUtf8();
     final payloadPtr = payload.toNativeUtf8();
-    final errPtr = _bindings.sendCallSignal(_handle, peerPtr, typePtr, payloadPtr);
+    final errPtr =
+        _bindings.sendCallSignal(_handle, peerPtr, typePtr, payloadPtr);
     malloc.free(peerPtr);
     malloc.free(typePtr);
     malloc.free(payloadPtr);

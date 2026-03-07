@@ -6,7 +6,7 @@ import (
 
 func TestTransferStartAndGet(t *testing.T) {
 	tm := NewTransferManager()
-	tr := tm.Start("tid-1", "peer-1", "file.txt", 1024, true)
+	tr := tm.Start("tid-1", "peer-1", "file.txt", 1024, true, TransferOptions{})
 
 	if tr == nil {
 		t.Fatal("Start returned nil")
@@ -50,7 +50,7 @@ func TestTransferGetUnknown(t *testing.T) {
 func TestTransferSenderHasAcceptedChannel(t *testing.T) {
 	tm := NewTransferManager()
 	// Sending = true should have accepted channel.
-	tr := tm.Start("tid-send", "p1", "f.txt", 100, true)
+	tr := tm.Start("tid-send", "p1", "f.txt", 100, true, TransferOptions{})
 	if tr.accepted == nil {
 		t.Error("sender transfer should have accepted channel")
 	}
@@ -59,7 +59,7 @@ func TestTransferSenderHasAcceptedChannel(t *testing.T) {
 func TestTransferReceiverHasNoAcceptedChannel(t *testing.T) {
 	tm := NewTransferManager()
 	// Sending = false (receiver) should NOT have accepted channel.
-	tr := tm.Start("tid-recv", "p1", "f.txt", 100, false)
+	tr := tm.Start("tid-recv", "p1", "f.txt", 100, false, TransferOptions{})
 	if tr.accepted != nil {
 		t.Error("receiver transfer should not have accepted channel")
 	}
@@ -67,7 +67,7 @@ func TestTransferReceiverHasNoAcceptedChannel(t *testing.T) {
 
 func TestTransferUpdateProgress(t *testing.T) {
 	tm := NewTransferManager()
-	tm.Start("tid-1", "peer-1", "file.txt", 1024, false)
+	tm.Start("tid-1", "peer-1", "file.txt", 1024, false, TransferOptions{})
 
 	tm.UpdateProgress("tid-1", 512)
 
@@ -85,7 +85,7 @@ func TestTransferUpdateProgressUnknown(t *testing.T) {
 
 func TestTransferComplete(t *testing.T) {
 	tm := NewTransferManager()
-	tm.Start("tid-1", "peer-1", "file.txt", 1024, false)
+	tm.Start("tid-1", "peer-1", "file.txt", 1024, false, TransferOptions{})
 
 	tm.Complete("tid-1")
 
@@ -103,7 +103,7 @@ func TestTransferComplete(t *testing.T) {
 
 func TestTransferFail(t *testing.T) {
 	tm := NewTransferManager()
-	tm.Start("tid-1", "peer-1", "file.txt", 1024, false)
+	tm.Start("tid-1", "peer-1", "file.txt", 1024, false, TransferOptions{})
 
 	tm.Fail("tid-1", "connection reset")
 
@@ -130,7 +130,7 @@ func TestTransferCompleteUnknown(t *testing.T) {
 
 func TestTransferRemove(t *testing.T) {
 	tm := NewTransferManager()
-	tm.Start("tid-1", "peer-1", "file.txt", 1024, false)
+	tm.Start("tid-1", "peer-1", "file.txt", 1024, false, TransferOptions{})
 	tm.Remove("tid-1")
 
 	got := tm.Get("tid-1")
@@ -141,9 +141,9 @@ func TestTransferRemove(t *testing.T) {
 
 func TestTransferList(t *testing.T) {
 	tm := NewTransferManager()
-	tm.Start("tid-1", "peer-1", "a.txt", 100, true)
-	tm.Start("tid-2", "peer-2", "b.txt", 200, false)
-	tm.Start("tid-3", "peer-3", "c.txt", 300, true)
+	tm.Start("tid-1", "peer-1", "a.txt", 100, true, TransferOptions{})
+	tm.Start("tid-2", "peer-2", "b.txt", 200, false, TransferOptions{})
+	tm.Start("tid-3", "peer-3", "c.txt", 300, true, TransferOptions{})
 
 	list := tm.List()
 	if len(list) != 3 {
@@ -161,7 +161,7 @@ func TestTransferListEmpty(t *testing.T) {
 
 func TestTransferGroupID(t *testing.T) {
 	tm := NewTransferManager()
-	tr := tm.Start("tid-1", "peer-1", "file.txt", 1024, true)
+	tr := tm.Start("tid-1", "peer-1", "file.txt", 1024, true, TransferOptions{})
 	tr.GroupID = "grp-abc"
 
 	got := tm.Get("tid-1")

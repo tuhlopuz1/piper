@@ -28,21 +28,33 @@ const (
 
 // Transfer tracks the state of an ongoing file transfer.
 type Transfer struct {
-	ID       string
-	PeerID   string
-	GroupID  string // non-empty when this transfer is part of a group file send
-	FileName string
-	FileSize int64
-	Sending  bool  // true = outgoing, false = incoming
-	Progress int64 // bytes transferred so far
-	Done     bool
-	Err      string // non-empty if failed
+	ID             string
+	PeerID         string
+	GroupID        string // non-empty when this transfer is part of a group file send
+	FileName       string
+	FileSize       int64
+	Sending        bool  // true = outgoing, false = incoming
+	Progress       int64 // bytes transferred so far
+	Done           bool
+	Err            string // non-empty if failed
+	AttachmentID   string
+	AttachmentKind string
+	MimeType       string
+	VoiceDuration  int
 
 	// Internal — not exposed to TUI.
-	file     *os.File  // open file handle (send: read, recv: write)
-	hash     hash.Hash // running SHA-256
-	filePath string    // full path (send: source, recv: destination)
+	file     *os.File      // open file handle (send: read, recv: write)
+	hash     hash.Hash     // running SHA-256
+	filePath string        // full path (send: source, recv: destination)
 	accepted chan struct{} // closed when FileAccept is received (sender side)
+}
+
+type TransferOptions struct {
+	GroupID        string
+	AttachmentID   string
+	AttachmentKind string
+	MimeType       string
+	VoiceDuration  int
 }
 
 // TransferEvent is emitted on the Node event channel for transfer lifecycle changes.
@@ -63,16 +75,21 @@ func NewTransferManager() *TransferManager {
 }
 
 // Start registers a new transfer and returns it.
-func (tm *TransferManager) Start(id, peerID, fileName string, fileSize int64, sending bool) *Transfer {
+func (tm *TransferManager) Start(id, peerID, fileName string, fileSize int64, sending bool, opts TransferOptions) *Transfer {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	t := &Transfer{
-		ID:       id,
-		PeerID:   peerID,
-		FileName: fileName,
-		FileSize: fileSize,
-		Sending:  sending,
-		hash:     sha256.New(),
+		ID:             id,
+		PeerID:         peerID,
+		GroupID:        opts.GroupID,
+		FileName:       fileName,
+		FileSize:       fileSize,
+		Sending:        sending,
+		AttachmentID:   opts.AttachmentID,
+		AttachmentKind: opts.AttachmentKind,
+		MimeType:       opts.MimeType,
+		VoiceDuration:  opts.VoiceDuration,
+		hash:           sha256.New(),
 	}
 	if sending {
 		t.accepted = make(chan struct{})

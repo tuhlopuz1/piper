@@ -25,17 +25,23 @@ class PiperEvent {
   final String? hopPath;
 
   // Group event fields
-  final String? groupEvent; // "created", "member_joined", "member_left", "deleted"
+  final String?
+      groupEvent; // "created", "member_joined", "member_left", "deleted"
   final List<String>? members;
 
   // Transfer fields
   final String? transferId;
-  final String? transferKind; // "offered","started","progress","completed","failed"
+  final String?
+      transferKind; // "offered","started","progress","completed","failed"
   final String? fileName;
   final int? fileSize;
   final bool? sending;
   final int? progress;
   final String? transferError;
+  final String? attachmentId;
+  final String? attachmentKind;
+  final String? mimeType;
+  final int? voiceDuration;
 
   const PiperEvent({
     required this.type,
@@ -62,6 +68,10 @@ class PiperEvent {
     this.sending,
     this.progress,
     this.transferError,
+    this.attachmentId,
+    this.attachmentKind,
+    this.mimeType,
+    this.voiceDuration,
   });
 
   factory PiperEvent.fromJson(Map<String, dynamic> json) {
@@ -82,9 +92,8 @@ class PiperEvent {
       relayPeerName: json['relay_peer_name'] as String?,
       hopPath: json['hop_path'] as String?,
       groupEvent: json['group_event'] as String?,
-      members: (json['members'] as List<dynamic>?)
-          ?.map((e) => e as String)
-          .toList(),
+      members:
+          (json['members'] as List<dynamic>?)?.map((e) => e as String).toList(),
       transferId: json['transfer_id'] as String?,
       transferKind: json['transfer_kind'] as String?,
       fileName: json['file_name'] as String?,
@@ -92,6 +101,10 @@ class PiperEvent {
       sending: json['sending'] as bool?,
       progress: json['progress'] as int?,
       transferError: json['transfer_error'] as String?,
+      attachmentId: json['attachment_id'] as String?,
+      attachmentKind: json['attachment_kind'] as String?,
+      mimeType: json['mime_type'] as String?,
+      voiceDuration: json['voice_duration'] as int?,
     );
   }
 
@@ -151,9 +164,8 @@ class GroupInfo {
     return GroupInfo(
       id: json['id'] as String,
       name: json['name'] as String,
-      members: (json['members'] as List<dynamic>)
-          .map((e) => e as String)
-          .toList(),
+      members:
+          (json['members'] as List<dynamic>).map((e) => e as String).toList(),
     );
   }
 }

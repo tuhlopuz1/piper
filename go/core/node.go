@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"os"
 	"path/filepath"
@@ -61,8 +62,8 @@ type Node struct {
 	connGen      map[string]uint64
 
 	// Mesh routing state
-	seenMsgIDs sync.Map            // msgID -> time.Time (deduplication)
-	routeTable map[string]string   // targetPeerID -> nextHopPeerID
+	seenMsgIDs sync.Map          // msgID -> time.Time (deduplication)
+	routeTable map[string]string // targetPeerID -> nextHopPeerID
 	routeMu    sync.RWMutex
 
 	eventCh chan Event
@@ -363,48 +364,100 @@ func (n *Node) sendToGroupMembers(g *Group, msg Message) {
 // Transfers returns the TransferManager for inspecting active transfers.
 func (n *Node) Transfers() *TransferManager { return n.transfers }
 
+type attachmentSendOptions struct {
+	GroupID        string
+	AttachmentID   string
+	AttachmentKind string
+	MimeType       string
+	VoiceDuration  int
+}
+
 // SendFile initiates a file transfer to peerID. It opens the file, sends a
 // FileOffer, and spawns a background goroutine that streams encrypted chunks
 // once the receiver auto-accepts.
 func (n *Node) SendFile(peerID, filePath string) error {
+	_, err := n.sendAttachment(peerID, filePath, attachmentSendOptions{})
+	return err
+}
+
+func (n *Node) SendVoice(peerID, filePath string, durationSec int) error {
+	_, err := n.sendAttachment(peerID, filePath, attachmentSendOptions{
+		AttachmentKind: AttachmentKindVoice,
+		MimeType:       "audio/mp4",
+		VoiceDuration:  durationSec,
+	})
+	return err
+}
+
+// SendFileToGroup sends a file to every member of the group. Each member gets
+// an independent transfer with its own file handle and streaming goroutine.
+// The GroupID is stored on each Transfer so the TUI can route events correctly.
+func (n *Node) SendFileToGroup(groupID, filePath string) (sent int, _ error) {
+	return n.sendAttachmentToGroup(groupID, filePath, attachmentSendOptions{
+		GroupID: groupID,
+	})
+}
+
+func (n *Node) SendVoiceToGroup(groupID, filePath string, durationSec int) (sent int, _ error) {
+	return n.sendAttachmentToGroup(groupID, filePath, attachmentSendOptions{
+		GroupID:        groupID,
+		AttachmentKind: AttachmentKindVoice,
+		MimeType:       "audio/mp4",
+		VoiceDuration:  durationSec,
+	})
+}
+
+func (n *Node) sendAttachment(peerID, filePath string, opts attachmentSendOptions) (*Transfer, error) {
 	peer := n.peers.Get(peerID)
 	if peer == nil {
-		return fmt.Errorf("unknown peer %s", peerID)
+		return nil, fmt.Errorf("unknown peer %s", peerID)
 	}
 	if isZeroKey(peer.SharedKey) {
-		return fmt.Errorf("no shared key with peer %s (handshake incomplete)", peerID)
+		return nil, fmt.Errorf("no shared key with peer %s (handshake incomplete)", peerID)
 	}
 
 	f, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("open file: %w", err)
+		return nil, fmt.Errorf("open file: %w", err)
 	}
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return fmt.Errorf("stat file: %w", err)
+		return nil, fmt.Errorf("stat file: %w", err)
 	}
 	if info.IsDir() {
 		f.Close()
-		return fmt.Errorf("%s is a directory", filePath)
+		return nil, fmt.Errorf("%s is a directory", filePath)
 	}
 
+	opts = normalizeAttachmentOptions(filePath, opts)
 	tid := uuid.NewString()
-	t := n.transfers.Start(tid, peerID, info.Name(), info.Size(), true)
+	t := n.transfers.Start(tid, peerID, info.Name(), info.Size(), true, TransferOptions{
+		GroupID:        opts.GroupID,
+		AttachmentID:   opts.AttachmentID,
+		AttachmentKind: opts.AttachmentKind,
+		MimeType:       opts.MimeType,
+		VoiceDuration:  opts.VoiceDuration,
+	})
 	t.file = f
 	t.filePath = filePath
 
 	// Send offer to receiver.
 	offer := Message{
-		ID:         uuid.NewString(),
-		Type:       MsgTypeFileOffer,
-		PeerID:     n.id,
-		Name:       n.name,
-		To:         peerID,
-		TransferID: tid,
-		FileName:   info.Name(),
-		FileSize:   info.Size(),
-		Timestamp:  time.Now(),
+		ID:             uuid.NewString(),
+		Type:           MsgTypeFileOffer,
+		PeerID:         n.id,
+		Name:           n.name,
+		To:             peerID,
+		GroupID:        opts.GroupID,
+		TransferID:     tid,
+		AttachmentID:   opts.AttachmentID,
+		AttachmentKind: opts.AttachmentKind,
+		MimeType:       opts.MimeType,
+		VoiceDuration:  opts.VoiceDuration,
+		FileName:       info.Name(),
+		FileSize:       info.Size(),
+		Timestamp:      time.Now(),
 	}
 
 	n.mu.Lock()
@@ -413,12 +466,14 @@ func (n *Node) SendFile(peerID, filePath string) error {
 	if cn == nil {
 		f.Close()
 		n.transfers.Fail(tid, "no connection to peer")
-		return fmt.Errorf("no connection to peer %s", peerID)
+		n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferFailed}})
+		return nil, fmt.Errorf("no connection to peer %s", peerID)
 	}
 	if err := cn.send(offer); err != nil {
 		f.Close()
 		n.transfers.Fail(tid, err.Error())
-		return fmt.Errorf("send offer: %w", err)
+		n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferFailed}})
+		return nil, fmt.Errorf("send offer: %w", err)
 	}
 
 	n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferOffered}})
@@ -426,13 +481,10 @@ func (n *Node) SendFile(peerID, filePath string) error {
 
 	// Spawn goroutine that waits for accept and streams chunks.
 	go n.streamFileChunks(t, peer.SharedKey, cn)
-	return nil
+	return t, nil
 }
 
-// SendFileToGroup sends a file to every member of the group. Each member gets
-// an independent transfer with its own file handle and streaming goroutine.
-// The GroupID is stored on each Transfer so the TUI can route events correctly.
-func (n *Node) SendFileToGroup(groupID, filePath string) (sent int, _ error) {
+func (n *Node) sendAttachmentToGroup(groupID, filePath string, opts attachmentSendOptions) (sent int, _ error) {
 	g := n.groups.Get(groupID)
 	if g == nil {
 		return 0, fmt.Errorf("unknown group %s", groupID)
@@ -447,6 +499,8 @@ func (n *Node) SendFileToGroup(groupID, filePath string) (sent int, _ error) {
 		return 0, fmt.Errorf("%s is a directory", filePath)
 	}
 
+	opts.GroupID = groupID
+	opts = normalizeAttachmentOptions(filePath, opts)
 	var firstErr error
 	for memberID := range g.Members {
 		if memberID == n.id {
@@ -466,21 +520,31 @@ func (n *Node) SendFileToGroup(groupID, filePath string) (sent int, _ error) {
 		}
 
 		tid := uuid.NewString()
-		t := n.transfers.Start(tid, memberID, info.Name(), info.Size(), true)
-		t.GroupID = groupID
+		t := n.transfers.Start(tid, memberID, info.Name(), info.Size(), true, TransferOptions{
+			GroupID:        groupID,
+			AttachmentID:   opts.AttachmentID,
+			AttachmentKind: opts.AttachmentKind,
+			MimeType:       opts.MimeType,
+			VoiceDuration:  opts.VoiceDuration,
+		})
 		t.file = f
 		t.filePath = filePath
 
 		offer := Message{
-			ID:         uuid.NewString(),
-			Type:       MsgTypeFileOffer,
-			PeerID:     n.id,
-			Name:       n.name,
-			To:         memberID,
-			TransferID: tid,
-			FileName:   info.Name(),
-			FileSize:   info.Size(),
-			Timestamp:  time.Now(),
+			ID:             uuid.NewString(),
+			Type:           MsgTypeFileOffer,
+			PeerID:         n.id,
+			Name:           n.name,
+			To:             memberID,
+			GroupID:        groupID,
+			TransferID:     tid,
+			AttachmentID:   opts.AttachmentID,
+			AttachmentKind: opts.AttachmentKind,
+			MimeType:       opts.MimeType,
+			VoiceDuration:  opts.VoiceDuration,
+			FileName:       info.Name(),
+			FileSize:       info.Size(),
+			Timestamp:      time.Now(),
 		}
 
 		n.mu.Lock()
@@ -489,11 +553,13 @@ func (n *Node) SendFileToGroup(groupID, filePath string) (sent int, _ error) {
 		if cn == nil {
 			f.Close()
 			n.transfers.Fail(tid, "no connection to peer")
+			n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferFailed}})
 			continue
 		}
 		if err := cn.send(offer); err != nil {
 			f.Close()
 			n.transfers.Fail(tid, err.Error())
+			n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferFailed}})
 			continue
 		}
 
@@ -511,6 +577,29 @@ func (n *Node) SendFileToGroup(groupID, filePath string) (sent int, _ error) {
 		return 0, fmt.Errorf("no reachable members in group")
 	}
 	return sent, nil
+}
+
+func normalizeAttachmentOptions(filePath string, opts attachmentSendOptions) attachmentSendOptions {
+	if opts.AttachmentID == "" {
+		opts.AttachmentID = uuid.NewString()
+	}
+	if opts.AttachmentKind == "" {
+		opts.AttachmentKind = AttachmentKindFile
+	}
+	if opts.MimeType == "" {
+		opts.MimeType = inferAttachmentMimeType(filePath, opts.AttachmentKind)
+	}
+	return opts
+}
+
+func inferAttachmentMimeType(filePath, attachmentKind string) string {
+	if attachmentKind == AttachmentKindVoice {
+		return "audio/mp4"
+	}
+	if mimeType := mime.TypeByExtension(filepath.Ext(filePath)); mimeType != "" {
+		return mimeType
+	}
+	return "application/octet-stream"
 }
 
 // streamFileChunks waits for FileAccept (via t.accepted channel), then reads
@@ -1183,7 +1272,21 @@ func (n *Node) handleFileOffer(msg Message, cn *conn) {
 		return
 	}
 
-	t := n.transfers.Start(msg.TransferID, msg.PeerID, msg.FileName, msg.FileSize, false)
+	attachmentID := msg.AttachmentID
+	if attachmentID == "" {
+		attachmentID = msg.TransferID
+	}
+	attachmentKind := msg.AttachmentKind
+	if attachmentKind == "" {
+		attachmentKind = AttachmentKindFile
+	}
+	t := n.transfers.Start(msg.TransferID, msg.PeerID, msg.FileName, msg.FileSize, false, TransferOptions{
+		GroupID:        msg.GroupID,
+		AttachmentID:   attachmentID,
+		AttachmentKind: attachmentKind,
+		MimeType:       msg.MimeType,
+		VoiceDuration:  msg.VoiceDuration,
+	})
 	t.file = f
 	t.filePath = destPath
 

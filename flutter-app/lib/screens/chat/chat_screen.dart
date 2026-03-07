@@ -1,10 +1,17 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:audioplayers/audioplayers.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:open_file/open_file.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:open_file/open_file.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
+import 'package:record/record.dart';
 import '../../theme/app_theme.dart';
 import '../../models/chat.dart';
 import '../../models/message.dart';
@@ -28,19 +35,34 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _textCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  final AudioRecorder _recorder = AudioRecorder();
+  final AudioPlayer _audioPlayer = AudioPlayer();
   late List<Message> _messages;
   bool _showAttach = false;
   bool _isRecording = false;
   int _recordSeconds = 0;
+  String? _recordingPath;
+  Timer? _recordTimer;
+  StreamSubscription<PiperUserError>? _userErrorSub;
+  StreamSubscription<PlayerState>? _playerStateSub;
+  StreamSubscription<Duration>? _playerPositionSub;
+  StreamSubscription<Duration>? _playerDurationSub;
+  StreamSubscription<void>? _playerCompleteSub;
   PiperService? _svc;
+  String? _playingMessageId;
+  PlayerState _playerState = PlayerState.stopped;
+  Duration _playerPosition = Duration.zero;
+  Duration _playerDuration = Duration.zero;
 
   @override
   void initState() {
     super.initState();
     _messages = getMockMessages(widget.chat);
+    _svc = context.read<PiperService>();
+    _userErrorSub = _svc!.userErrors.listen(_handleUserError);
+    _initAudioPlayer();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _svc = context.read<PiperService>();
       _svc!.currentChatId = widget.chat.id;
       _svc!.markChatAsRead(widget.chat.id);
     });
@@ -49,6 +71,15 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _svc?.currentChatId = null;
+    _userErrorSub?.cancel();
+    _playerStateSub?.cancel();
+    _playerPositionSub?.cancel();
+    _playerDurationSub?.cancel();
+    _playerCompleteSub?.cancel();
+    _recordTimer?.cancel();
+    unawaited(_recorder.cancel());
+    unawaited(_recorder.dispose());
+    unawaited(_audioPlayer.dispose());
     _textCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -97,6 +128,86 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _handleUserError(PiperUserError error) {
+    if (!mounted) return;
+    if (error.chatId != null && error.chatId != widget.chat.id) return;
+    _showSnackBar(error.message);
+  }
+
+  void _initAudioPlayer() {
+    unawaited(_audioPlayer.setReleaseMode(ReleaseMode.stop));
+    _playerStateSub = _audioPlayer.onPlayerStateChanged.listen((state) {
+      if (!mounted) return;
+      setState(() {
+        _playerState = state;
+        if (state == PlayerState.stopped && _playingMessageId == null) {
+          _playerPosition = Duration.zero;
+          _playerDuration = Duration.zero;
+        }
+      });
+    });
+    _playerPositionSub = _audioPlayer.onPositionChanged.listen((position) {
+      if (!mounted || _playingMessageId == null) return;
+      setState(() => _playerPosition = position);
+    });
+    _playerDurationSub = _audioPlayer.onDurationChanged.listen((duration) {
+      if (!mounted || _playingMessageId == null) return;
+      setState(() => _playerDuration = duration);
+    });
+    _playerCompleteSub = _audioPlayer.onPlayerComplete.listen((_) {
+      if (!mounted) return;
+      setState(() {
+        _playerState = PlayerState.completed;
+        _playerPosition = _playerDuration;
+        _playingMessageId = null;
+      });
+    });
+  }
+
+  void _showSnackBar(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollCtrl.hasClients) {
+        _scrollCtrl.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    });
+  }
+
+  Future<bool> _ensureMicrophonePermission() async {
+    if (Platform.isAndroid || Platform.isIOS) {
+      final status = await Permission.microphone.request();
+      return status.isGranted;
+    }
+    return true;
+  }
+
+  Future<String> _createVoiceRecordingPath() async {
+    final supportDir = await getApplicationSupportDirectory();
+    final recordingsDir = Directory(
+      '${supportDir.path}${Platform.pathSeparator}voice-recordings',
+    );
+    await recordingsDir.create(recursive: true);
+    return '${recordingsDir.path}${Platform.pathSeparator}'
+        'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+  }
+
+  Future<void> _deleteFileIfExists(String? path) async {
+    if (path == null || path.isEmpty) return;
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
+  }
+
   Future<void> _pickAndSendFile({bool imageOnly = false}) async {
     setState(() => _showAttach = false);
     final result = await FilePicker.platform.pickFiles(
@@ -112,13 +223,15 @@ class _ChatScreenState extends State<ChatScreen> {
     final chatId = widget.chat.id;
     if (widget.chat.isGroup && chatId != 'global') {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Отправка файлов в группы пока не поддерживается')),
+        const SnackBar(
+            content: Text('Отправка файлов в группы пока не поддерживается')),
       );
       return;
     }
     if (chatId == 'global') {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Отправка файлов в общий чат не поддерживается')),
+        const SnackBar(
+            content: Text('Отправка файлов в общий чат не поддерживается')),
       );
       return;
     }
@@ -126,30 +239,227 @@ class _ChatScreenState extends State<ChatScreen> {
     svc.sendFile(chatId, file.path!);
   }
 
-  void _startRecording() => setState(() => _isRecording = true);
-  void _cancelRecording() => setState(() { _isRecording = false; _recordSeconds = 0; });
-  void _sendVoice() {
-    if (_recordSeconds == 0) { _cancelRecording(); return; }
+  Future<void> _startRecording() async {
+    if (widget.chat.id == 'global') {
+      _showSnackBar('Голосовые сообщения в общий чат не поддерживаются');
+      return;
+    }
+    if (!await _ensureMicrophonePermission()) {
+      _showSnackBar('Нет доступа к микрофону');
+      return;
+    }
+
+    try {
+      final path = await _createVoiceRecordingPath();
+      await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          numChannels: 1,
+        ),
+        path: path,
+      );
+      _recordTimer?.cancel();
+      _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        setState(() => _recordSeconds += 1);
+      });
+      if (!mounted) return;
+      setState(() {
+        _showAttach = false;
+        _isRecording = true;
+        _recordSeconds = 0;
+        _recordingPath = path;
+      });
+    } catch (e) {
+      await _deleteFileIfExists(_recordingPath);
+      if (!mounted) return;
+      _showSnackBar('Не удалось начать запись');
+    }
+  }
+
+  Future<void> _cancelRecording() async {
+    _recordTimer?.cancel();
+    _recordTimer = null;
+    try {
+      await _recorder.cancel();
+    } catch (_) {}
+    await _deleteFileIfExists(_recordingPath);
+    if (!mounted) return;
     setState(() {
-      _messages.add(Message(
-        id: 'voice_${DateTime.now().millisecondsSinceEpoch}',
-        isMe: true,
-        type: MsgType.voice,
-        voiceDuration: _recordSeconds,
-        time: DateTime.now(),
-        delivered: false,
-      ));
       _isRecording = false;
       _recordSeconds = 0;
+      _recordingPath = null;
     });
+  }
+
+  Future<void> _sendVoice() async {
+    if (_recordSeconds == 0) {
+      await _cancelRecording();
+      return;
+    }
+
+    _recordTimer?.cancel();
+    _recordTimer = null;
+    final durationSec = _recordSeconds;
+    String? path;
+    try {
+      path = await _recorder.stop();
+    } catch (_) {}
+    path ??= _recordingPath;
+
+    if (path == null) {
+      await _cancelRecording();
+      return;
+    }
+
+    final resolvedPath = path;
+    try {
+      final file = File(resolvedPath);
+      final size = await file.exists() ? await file.length() : 0;
+      if (size <= 0) {
+        await _deleteFileIfExists(resolvedPath);
+        if (mounted) {
+          setState(() {
+            _isRecording = false;
+            _recordSeconds = 0;
+            _recordingPath = null;
+          });
+        }
+        return;
+      }
+
+      final svc = _svc;
+      if (svc == null) return;
+      if (mounted) {
+        setState(() {
+          _isRecording = false;
+          _recordSeconds = 0;
+          _recordingPath = null;
+        });
+      }
+
+      if (svc.isRunning) {
+        if (widget.chat.isGroup) {
+          svc.sendVoice(
+            groupId: widget.chat.id.replaceFirst('group:', ''),
+            filePath: resolvedPath,
+            durationSec: durationSec,
+          );
+        } else {
+          svc.sendVoice(
+            toPeerId: widget.chat.id,
+            filePath: resolvedPath,
+            durationSec: durationSec,
+          );
+        }
+      } else {
+        setState(() {
+          _messages.add(Message(
+            id: 'voice_${DateTime.now().millisecondsSinceEpoch}',
+            isMe: true,
+            type: MsgType.voice,
+            fileName: resolvedPath.split(Platform.pathSeparator).last,
+            filePath: resolvedPath,
+            voiceDuration: durationSec,
+            time: DateTime.now(),
+            delivered: false,
+          ));
+        });
+      }
+      _scrollToBottom();
+    } catch (e) {
+      await _deleteFileIfExists(resolvedPath);
+      if (!mounted) return;
+      setState(() {
+        _isRecording = false;
+        _recordSeconds = 0;
+        _recordingPath = null;
+      });
+      _showSnackBar('Не удалось отправить голосовое сообщение');
+    }
+  }
+
+  Future<void> _toggleVoicePlayback(Message message) async {
+    final path = message.filePath;
+    if (path == null || path.isEmpty) {
+      _showSnackBar('Файл голосового сообщения не найден');
+      return;
+    }
+
+    if (!await File(path).exists()) {
+      _showSnackBar('Файл голосового сообщения не найден');
+      return;
+    }
+
+    try {
+      if (_playingMessageId == message.id) {
+        if (_playerState == PlayerState.playing) {
+          await _audioPlayer.pause();
+        } else if (_playerState == PlayerState.paused) {
+          await _audioPlayer.resume();
+        } else {
+          await _audioPlayer.seek(Duration.zero);
+          await _audioPlayer.resume();
+        }
+        return;
+      }
+
+      await _audioPlayer.stop();
+      await _audioPlayer.setSourceDeviceFile(path, mimeType: 'audio/mp4');
+      final duration = await _audioPlayer.getDuration() ??
+          Duration(seconds: message.voiceDuration ?? 0);
+      if (!mounted) return;
+      setState(() {
+        _playingMessageId = message.id;
+        _playerPosition = Duration.zero;
+        _playerDuration = duration;
+      });
+      await _audioPlayer.resume();
+    } catch (e) {
+      if (!mounted) return;
+      _showSnackBar('Не удалось воспроизвести голосовое сообщение');
+    }
+  }
+
+  Future<void> _seekVoice(Message message, double value) async {
+    if (_playingMessageId != message.id) return;
+    final duration = _voiceDurationFor(message);
+    final target = Duration(
+      milliseconds: (duration.inMilliseconds * value).round(),
+    );
+    try {
+      await _audioPlayer.seek(target);
+      if (!mounted) return;
+      setState(() => _playerPosition = target);
+    } catch (_) {}
+  }
+
+  Duration _voiceDurationFor(Message message) {
+    if (_playingMessageId == message.id && _playerDuration > Duration.zero) {
+      return _playerDuration;
+    }
+    return Duration(seconds: message.voiceDuration ?? 0);
+  }
+
+  double _voiceProgressFor(Message message) {
+    final duration = _voiceDurationFor(message);
+    if (_playingMessageId != message.id || duration.inMilliseconds <= 0) {
+      return 0;
+    }
+    final progress = _playerPosition.inMilliseconds / duration.inMilliseconds;
+    return progress.clamp(0.0, 1.0);
+  }
+
+  bool _isPlayingMessage(Message message) {
+    return _playingMessageId == message.id &&
+        _playerState == PlayerState.playing;
   }
 
   @override
   Widget build(BuildContext context) {
     final svc = context.watch<PiperService>();
-    final displayMessages = svc.isRunning
-        ? (svc.messages[widget.chat.id] ?? [])
-        : _messages;
+    final displayMessages =
+        svc.isRunning ? (svc.messages[widget.chat.id] ?? []) : _messages;
 
     return Scaffold(
       backgroundColor: AppColors.bgBase,
@@ -161,13 +471,19 @@ class _ChatScreenState extends State<ChatScreen> {
               messages: displayMessages,
               scrollCtrl: _scrollCtrl,
               chat: widget.chat,
+              playingMessageId: _playingMessageId,
+              isPlaying: _isPlayingMessage,
+              voiceProgressFor: _voiceProgressFor,
+              voiceDurationFor: _voiceDurationFor,
+              onVoiceToggle: _toggleVoicePlayback,
+              onVoiceSeek: _seekVoice,
             ),
           ),
           if (_isRecording)
             _VoiceRecordingBar(
               seconds: _recordSeconds,
-              onCancel: _cancelRecording,
-              onSend: _sendVoice,
+              onCancel: () => unawaited(_cancelRecording()),
+              onSend: () => unawaited(_sendVoice()),
             )
           else
             _InputBar(
@@ -175,7 +491,7 @@ class _ChatScreenState extends State<ChatScreen> {
               showAttach: _showAttach,
               onAttachToggle: () => setState(() => _showAttach = !_showAttach),
               onSend: _sendText,
-              onMicStart: _startRecording,
+              onMicStart: () => unawaited(_startRecording()),
             ),
           if (_showAttach)
             _AttachPanel(
@@ -232,11 +548,16 @@ class _ChatAppBar extends StatelessWidget {
             child: GestureDetector(
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => ContactInfoScreen(chat: chat)),
+                MaterialPageRoute(
+                    builder: (_) => ContactInfoScreen(chat: chat)),
               ),
               child: Row(
                 children: [
-                  AppAvatar(style: chat.avatarStyle, initials: chat.initials, size: 38, isGroup: chat.isGroup),
+                  AppAvatar(
+                      style: chat.avatarStyle,
+                      initials: chat.initials,
+                      size: 38,
+                      isGroup: chat.isGroup),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
@@ -256,7 +577,9 @@ class _ChatAppBar extends StatelessWidget {
                           statusText,
                           style: GoogleFonts.inter(
                             fontSize: 12,
-                            color: isOnline ? AppColors.online : AppColors.mutedForeground,
+                            color: isOnline
+                                ? AppColors.online
+                                : AppColors.mutedForeground,
                           ),
                         ),
                       ],
@@ -273,9 +596,11 @@ class _ChatAppBar extends StatelessWidget {
               await CallService.instance.startCall(chat.id, chat.name, false);
               if (!context.mounted) return;
               if (CallService.instance.state == CallState.idle) return;
-              Navigator.push(context, MaterialPageRoute(
-                builder: (_) => const VoiceCallScreen(),
-              ));
+              Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const VoiceCallScreen(),
+                  ));
             },
           ),
           IconButton(
@@ -285,9 +610,11 @@ class _ChatAppBar extends StatelessWidget {
               await CallService.instance.startCall(chat.id, chat.name, true);
               if (!context.mounted) return;
               if (CallService.instance.state == CallState.idle) return;
-              Navigator.push(context, MaterialPageRoute(
-                builder: (_) => const VideoCallScreen(),
-              ));
+              Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const VideoCallScreen(),
+                  ));
             },
           ),
         ],
@@ -302,11 +629,23 @@ class _MessageList extends StatelessWidget {
   final List<Message> messages;
   final ScrollController scrollCtrl;
   final Chat chat;
+  final String? playingMessageId;
+  final bool Function(Message message) isPlaying;
+  final double Function(Message message) voiceProgressFor;
+  final Duration Function(Message message) voiceDurationFor;
+  final Future<void> Function(Message message) onVoiceToggle;
+  final Future<void> Function(Message message, double value) onVoiceSeek;
 
   const _MessageList({
     required this.messages,
     required this.scrollCtrl,
     required this.chat,
+    required this.playingMessageId,
+    required this.isPlaying,
+    required this.voiceProgressFor,
+    required this.voiceDurationFor,
+    required this.onVoiceToggle,
+    required this.onVoiceSeek,
   });
 
   bool _showDate(int i) {
@@ -332,7 +671,16 @@ class _MessageList extends StatelessWidget {
         return Column(
           children: [
             if (showDate) _DateDivider(date: msg.time),
-            _MessageBubble(message: msg, chat: chat)
+            _MessageBubble(
+              message: msg,
+              chat: chat,
+              isVoicePlaying: isPlaying(msg),
+              isVoiceActive: playingMessageId == msg.id,
+              voiceProgress: voiceProgressFor(msg),
+              voiceDuration: voiceDurationFor(msg),
+              onVoiceToggle: () => onVoiceToggle(msg),
+              onVoiceSeek: (value) => onVoiceSeek(msg, value),
+            )
                 .animate()
                 .fadeIn(duration: 200.ms)
                 .slideY(begin: 0.1, end: 0, duration: 200.ms),
@@ -353,7 +701,7 @@ class _DateDivider extends StatelessWidget {
     final d = DateTime(date.year, date.month, date.day);
     if (d == today) return 'Сегодня';
     if (d == today.subtract(const Duration(days: 1))) return 'Вчера';
-    return '${date.day}.${date.month.toString().padLeft(2,'0')}.${date.year}';
+    return '${date.day}.${date.month.toString().padLeft(2, '0')}.${date.year}';
   }
 
   @override
@@ -367,7 +715,8 @@ class _DateDivider extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Text(
               _label(),
-              style: GoogleFonts.inter(fontSize: 11, color: AppColors.mutedForeground),
+              style: GoogleFonts.inter(
+                  fontSize: 11, color: AppColors.mutedForeground),
             ),
           ),
           Expanded(child: Divider(color: AppColors.border, thickness: 0.5)),
@@ -382,8 +731,23 @@ class _DateDivider extends StatelessWidget {
 class _MessageBubble extends StatelessWidget {
   final Message message;
   final Chat chat;
+  final bool isVoicePlaying;
+  final bool isVoiceActive;
+  final double voiceProgress;
+  final Duration voiceDuration;
+  final Future<void> Function() onVoiceToggle;
+  final Future<void> Function(double value) onVoiceSeek;
 
-  const _MessageBubble({required this.message, required this.chat});
+  const _MessageBubble({
+    required this.message,
+    required this.chat,
+    required this.isVoicePlaying,
+    required this.isVoiceActive,
+    required this.voiceProgress,
+    required this.voiceDuration,
+    required this.onVoiceToggle,
+    required this.onVoiceSeek,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -398,7 +762,8 @@ class _MessageBubble extends StatelessWidget {
         right: isMe ? 0 : 48,
       ),
       child: Row(
-        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment:
+            isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!isMe && chat.isGroup) ...[
@@ -413,7 +778,8 @@ class _MessageBubble extends StatelessWidget {
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: maxBubbleW),
               child: Column(
-                crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                crossAxisAlignment:
+                    isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                 children: [
                   if (!isMe && chat.isGroup && message.senderName != null)
                     Padding(
@@ -427,7 +793,15 @@ class _MessageBubble extends StatelessWidget {
                         ),
                       ),
                     ),
-                  _BubbleContent(message: message),
+                  _BubbleContent(
+                    message: message,
+                    isVoicePlaying: isVoicePlaying,
+                    isVoiceActive: isVoiceActive,
+                    voiceProgress: voiceProgress,
+                    voiceDuration: voiceDuration,
+                    onVoiceToggle: onVoiceToggle,
+                    onVoiceSeek: onVoiceSeek,
+                  ),
                 ],
               ),
             ),
@@ -448,7 +822,22 @@ class _MessageBubble extends StatelessWidget {
 
 class _BubbleContent extends StatelessWidget {
   final Message message;
-  const _BubbleContent({required this.message});
+  final bool isVoicePlaying;
+  final bool isVoiceActive;
+  final double voiceProgress;
+  final Duration voiceDuration;
+  final Future<void> Function() onVoiceToggle;
+  final Future<void> Function(double value) onVoiceSeek;
+
+  const _BubbleContent({
+    required this.message,
+    required this.isVoicePlaying,
+    required this.isVoiceActive,
+    required this.voiceProgress,
+    required this.voiceDuration,
+    required this.onVoiceToggle,
+    required this.onVoiceSeek,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -465,16 +854,40 @@ class _BubbleContent extends StatelessWidget {
     Widget content;
     switch (message.type) {
       case MsgType.text:
-        content = _TextContent(message: message, bg: bg, fg: fg, radius: radius);
+        content =
+            _TextContent(message: message, bg: bg, fg: fg, radius: radius);
+        break;
       case MsgType.image:
         content = _ImageContent(message: message, radius: radius);
+        break;
       case MsgType.file:
-        final progress = context.read<PiperService>().progressByMsgId[message.id];
-        content = _FileContent(message: message, bg: bg, fg: fg, radius: radius, transferProgress: progress);
+        final progress =
+            context.read<PiperService>().progressByMsgId[message.id];
+        content = _FileContent(
+            message: message,
+            bg: bg,
+            fg: fg,
+            radius: radius,
+            transferProgress: progress);
+        break;
       case MsgType.voice:
-        content = _VoiceContent(message: message, bg: bg, fg: fg, radius: radius);
+        content = _VoiceContent(
+          message: message,
+          bg: bg,
+          fg: fg,
+          radius: radius,
+          isPlaying: isVoicePlaying,
+          isActive: isVoiceActive,
+          progress: voiceProgress,
+          duration: voiceDuration,
+          onToggle: onVoiceToggle,
+          onSeek: onVoiceSeek,
+        );
+        break;
       case MsgType.call:
-        content = _CallContent(message: message, bg: bg, fg: fg, radius: radius);
+        content =
+            _CallContent(message: message, bg: bg, fg: fg, radius: radius);
+        break;
     }
 
     return content;
@@ -485,7 +898,11 @@ class _TextContent extends StatelessWidget {
   final Message message;
   final Color bg, fg;
   final BorderRadius radius;
-  const _TextContent({required this.message, required this.bg, required this.fg, required this.radius});
+  const _TextContent(
+      {required this.message,
+      required this.bg,
+      required this.fg,
+      required this.radius});
 
   @override
   Widget build(BuildContext context) {
@@ -495,7 +912,8 @@ class _TextContent extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Text(message.text ?? '', style: GoogleFonts.inter(fontSize: 14, color: fg, height: 1.4)),
+          Text(message.text ?? '',
+              style: GoogleFonts.inter(fontSize: 14, color: fg, height: 1.4)),
           const SizedBox(height: 3),
           _TimeRow(message: message, fg: fg.withValues(alpha: 0.65)),
         ],
@@ -527,7 +945,8 @@ class _ImageContent extends StatelessWidget {
               alignment: Alignment.bottomRight,
               children: [
                 Center(
-                  child: Icon(Icons.image_outlined, size: 40, color: Colors.white.withValues(alpha: 0.5)),
+                  child: Icon(Icons.image_outlined,
+                      size: 40, color: Colors.white.withValues(alpha: 0.5)),
                 ),
                 Padding(
                   padding: const EdgeInsets.all(6),
@@ -549,7 +968,8 @@ class _FileContent extends StatelessWidget {
   final Message message;
   final Color bg, fg;
   final BorderRadius radius;
-  final double? transferProgress; // null = not transferring, 0.0-1.0 = in progress
+  final double?
+      transferProgress; // null = not transferring, 0.0-1.0 = in progress
 
   const _FileContent({
     required this.message,
@@ -630,10 +1050,13 @@ class _FileContent extends StatelessWidget {
                           if (message.fileSize != null)
                             Text(
                               _formatSize(message.fileSize!),
-                              style: GoogleFonts.inter(fontSize: 11, color: fg.withValues(alpha: 0.6)),
+                              style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  color: fg.withValues(alpha: 0.6)),
                             ),
                           const Spacer(),
-                          _TimeRow(message: message, fg: fg.withValues(alpha: 0.6)),
+                          _TimeRow(
+                              message: message, fg: fg.withValues(alpha: 0.6)),
                         ],
                       ),
                     ],
@@ -657,7 +1080,8 @@ class _FileContent extends StatelessWidget {
                 alignment: Alignment.centerRight,
                 child: Text(
                   '${((transferProgress!) * 100).toStringAsFixed(0)}%',
-                  style: GoogleFonts.inter(fontSize: 10, color: fg.withValues(alpha: 0.55)),
+                  style: GoogleFonts.inter(
+                      fontSize: 10, color: fg.withValues(alpha: 0.55)),
                 ),
               ),
             ],
@@ -668,42 +1092,59 @@ class _FileContent extends StatelessWidget {
   }
 }
 
-class _VoiceContent extends StatefulWidget {
+class _VoiceContent extends StatelessWidget {
   final Message message;
   final Color bg, fg;
   final BorderRadius radius;
-  const _VoiceContent({required this.message, required this.bg, required this.fg, required this.radius});
+  final bool isPlaying;
+  final bool isActive;
+  final double progress;
+  final Duration duration;
+  final Future<void> Function() onToggle;
+  final Future<void> Function(double value) onSeek;
 
-  @override
-  State<_VoiceContent> createState() => _VoiceContentState();
-}
+  const _VoiceContent({
+    required this.message,
+    required this.bg,
+    required this.fg,
+    required this.radius,
+    required this.isPlaying,
+    required this.isActive,
+    required this.progress,
+    required this.duration,
+    required this.onToggle,
+    required this.onSeek,
+  });
 
-class _VoiceContentState extends State<_VoiceContent> {
-  bool _playing = false;
-  double _progress = 0;
-
-  String _fmt(int s) => '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+  String _fmt(Duration value) {
+    final seconds = value.inSeconds;
+    return '${(seconds ~/ 60).toString().padLeft(2, '0')}:'
+        '${(seconds % 60).toString().padLeft(2, '0')}';
+  }
 
   @override
   Widget build(BuildContext context) {
+    final effectiveDuration = duration.inMilliseconds > 0
+        ? duration
+        : Duration(seconds: message.voiceDuration ?? 0);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(color: widget.bg, borderRadius: widget.radius),
+      decoration: BoxDecoration(color: bg, borderRadius: radius),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           GestureDetector(
-            onTap: () => setState(() => _playing = !_playing),
+            onTap: () => unawaited(onToggle()),
             child: Container(
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                color: widget.fg.withValues(alpha: 0.12),
+                color: fg.withValues(alpha: 0.12),
                 shape: BoxShape.circle,
               ),
               child: Icon(
-                _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                color: widget.fg,
+                isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                color: fg,
                 size: 20,
               ),
             ),
@@ -716,25 +1157,34 @@ class _VoiceContentState extends State<_VoiceContent> {
                 SliderTheme(
                   data: SliderThemeData(
                     trackHeight: 2,
-                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                    thumbShape:
+                        const RoundSliderThumbShape(enabledThumbRadius: 5),
                     overlayShape: SliderComponentShape.noOverlay,
-                    activeTrackColor: widget.fg,
-                    inactiveTrackColor: widget.fg.withValues(alpha: 0.25),
-                    thumbColor: widget.fg,
+                    activeTrackColor: fg,
+                    inactiveTrackColor: fg.withValues(alpha: 0.25),
+                    thumbColor: fg,
                   ),
                   child: Slider(
-                    value: _progress,
-                    onChanged: (v) => setState(() => _progress = v),
+                    value: progress.clamp(0.0, 1.0),
+                    onChanged: isActive && effectiveDuration.inMilliseconds > 0
+                        ? (value) => unawaited(onSeek(value))
+                        : null,
                   ),
                 ),
                 Row(
                   children: [
                     Text(
-                      _fmt(widget.message.voiceDuration ?? 0),
-                      style: GoogleFonts.inter(fontSize: 11, color: widget.fg.withValues(alpha: 0.6)),
+                      _fmt(effectiveDuration),
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: fg.withValues(alpha: 0.6),
+                      ),
                     ),
                     const Spacer(),
-                    _TimeRow(message: widget.message, fg: widget.fg.withValues(alpha: 0.6)),
+                    _TimeRow(
+                      message: message,
+                      fg: fg.withValues(alpha: 0.6),
+                    ),
                   ],
                 ),
               ],
@@ -750,17 +1200,24 @@ class _CallContent extends StatelessWidget {
   final Message message;
   final Color bg, fg;
   final BorderRadius radius;
-  const _CallContent({required this.message, required this.bg, required this.fg, required this.radius});
+  const _CallContent(
+      {required this.message,
+      required this.bg,
+      required this.fg,
+      required this.radius});
 
   IconData _icon() {
-    if (message.callResult == CallResult.missed) return Icons.call_missed_rounded;
-    if (message.callResult == CallResult.rejected) return Icons.call_end_rounded;
+    if (message.callResult == CallResult.missed)
+      return Icons.call_missed_rounded;
+    if (message.callResult == CallResult.rejected)
+      return Icons.call_end_rounded;
     if (message.isMe) return Icons.call_made_rounded;
     return Icons.call_received_rounded;
   }
 
   String _label() {
-    final type = (message.callIsVideo ?? false) ? 'Видеозвонок' : 'Голосовой звонок';
+    final type =
+        (message.callIsVideo ?? false) ? 'Видеозвонок' : 'Голосовой звонок';
     if (message.callResult == CallResult.missed) return '$type · Пропущенный';
     if (message.callResult == CallResult.rejected) return '$type · Отклонён';
     final dur = message.callDuration ?? 0;
@@ -792,7 +1249,9 @@ class _CallContent extends StatelessWidget {
               shape: BoxShape.circle,
             ),
             child: Icon(
-              (message.callIsVideo ?? false) ? Icons.videocam_rounded : Icons.phone_rounded,
+              (message.callIsVideo ?? false)
+                  ? Icons.videocam_rounded
+                  : Icons.phone_rounded,
               color: iconColor,
               size: 18,
             ),
@@ -907,7 +1366,8 @@ class _InputBarState extends State<_InputBar> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.fromLTRB(8, 8, 8, MediaQuery.of(context).padding.bottom + 8),
+      padding: EdgeInsets.fromLTRB(
+          8, 8, 8, MediaQuery.of(context).padding.bottom + 8),
       decoration: BoxDecoration(
         color: AppColors.bgSubtle,
         border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
@@ -934,12 +1394,15 @@ class _InputBarState extends State<_InputBar> {
               child: TextField(
                 controller: widget.controller,
                 focusNode: _focusNode,
-                style: GoogleFonts.inter(fontSize: 14, color: AppColors.foreground),
+                style: GoogleFonts.inter(
+                    fontSize: 14, color: AppColors.foreground),
                 maxLines: null,
                 decoration: InputDecoration(
                   hintText: 'Сообщение...',
-                  hintStyle: GoogleFonts.inter(fontSize: 14, color: AppColors.mutedForeground),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  hintStyle: GoogleFonts.inter(
+                      fontSize: 14, color: AppColors.mutedForeground),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   border: InputBorder.none,
                 ),
               ),
@@ -960,7 +1423,9 @@ class _InputBarState extends State<_InputBar> {
                     gradient: hasText ? AppColors.primaryGradient : null,
                     color: hasText ? null : AppColors.bgBase,
                     shape: BoxShape.circle,
-                    border: hasText ? null : Border.all(color: AppColors.border, width: 0.5),
+                    border: hasText
+                        ? null
+                        : Border.all(color: AppColors.border, width: 0.5),
                   ),
                   child: Icon(
                     hasText ? Icons.send_rounded : Icons.mic_none_rounded,
@@ -993,14 +1458,15 @@ class _AttachPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = [
-      (Icons.image_outlined,    'Фото',       onPhotoPick),
-      (Icons.folder_outlined,   'Файл',       onFilePick),
-      (Icons.camera_alt_outlined, 'Камера',   null),
+      (Icons.image_outlined, 'Фото', onPhotoPick),
+      (Icons.folder_outlined, 'Файл', onFilePick),
+      (Icons.camera_alt_outlined, 'Камера', null),
       (Icons.location_on_outlined, 'Геопозиция', null),
     ];
 
     return Container(
-      padding: EdgeInsets.fromLTRB(20, 16, 20, MediaQuery.of(context).padding.bottom + 16),
+      padding: EdgeInsets.fromLTRB(
+          20, 16, 20, MediaQuery.of(context).padding.bottom + 16),
       decoration: BoxDecoration(
         color: AppColors.bgSubtle,
         border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
@@ -1013,7 +1479,11 @@ class _AttachPanel extends StatelessWidget {
           return _AttachItem(icon: icon, label: label, onTap: onTap)
               .animate(delay: Duration(milliseconds: i * 40))
               .fadeIn(duration: 200.ms)
-              .scale(begin: const Offset(0.7, 0.7), end: const Offset(1, 1), duration: 200.ms, curve: Curves.easeOutBack);
+              .scale(
+                  begin: const Offset(0.7, 0.7),
+                  end: const Offset(1, 1),
+                  duration: 200.ms,
+                  curve: Curves.easeOutBack);
         }).toList(),
       ),
     );
@@ -1041,14 +1511,17 @@ class _AttachItem extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.primary.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.primary.withValues(alpha: 0.2), width: 0.5),
+                border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.2),
+                    width: 0.5),
               ),
               child: Icon(icon, color: AppColors.primaryLight, size: 24),
             ),
             const SizedBox(height: 6),
             Text(
               label,
-              style: GoogleFonts.inter(fontSize: 11, color: AppColors.mutedForeground),
+              style: GoogleFonts.inter(
+                  fontSize: 11, color: AppColors.mutedForeground),
             ),
           ],
         ),
@@ -1070,12 +1543,14 @@ class _VoiceRecordingBar extends StatelessWidget {
     required this.onSend,
   });
 
-  String _fmt(int s) => '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+  String _fmt(int s) =>
+      '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.fromLTRB(16, 12, 16, MediaQuery.of(context).padding.bottom + 12),
+      padding: EdgeInsets.fromLTRB(
+          16, 12, 16, MediaQuery.of(context).padding.bottom + 12),
       decoration: BoxDecoration(
         color: AppColors.bgSubtle,
         border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
@@ -1091,14 +1566,16 @@ class _VoiceRecordingBar extends StatelessWidget {
                 color: AppColors.destructive.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.delete_outline_rounded, color: AppColors.destructive, size: 20),
+              child: const Icon(Icons.delete_outline_rounded,
+                  color: AppColors.destructive, size: 20),
             ),
           ),
           const SizedBox(width: 12),
           Container(
             width: 8,
             height: 8,
-            decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+            decoration:
+                const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
           )
               .animate(onPlay: (c) => c.repeat(reverse: true))
               .fadeIn(duration: 600.ms),
@@ -1122,7 +1599,8 @@ class _VoiceRecordingBar extends StatelessWidget {
                 gradient: AppColors.primaryGradient,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+              child:
+                  const Icon(Icons.send_rounded, color: Colors.white, size: 20),
             ),
           ),
         ],

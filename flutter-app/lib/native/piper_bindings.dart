@@ -5,7 +5,8 @@ import 'package:ffi/ffi.dart';
 
 // C function signatures (as defined in bridge.go)
 typedef _CreateNodeC = Int32 Function(Pointer<Utf8> name, Pointer<Utf8> nodeID);
-typedef _CreateNodeDart = int Function(Pointer<Utf8> name, Pointer<Utf8> nodeID);
+typedef _CreateNodeDart = int Function(
+    Pointer<Utf8> name, Pointer<Utf8> nodeID);
 
 typedef _SetNodeNameC = Void Function(Int32 handle, Pointer<Utf8> name);
 typedef _SetNodeNameDart = void Function(int handle, Pointer<Utf8> name);
@@ -22,23 +23,45 @@ typedef _NodeIDDart = Pointer<Utf8> Function(int handle);
 typedef _NodeNameC = Pointer<Utf8> Function(Int32 handle);
 typedef _NodeNameDart = Pointer<Utf8> Function(int handle);
 
-typedef _SendC = Void Function(Int32 handle, Pointer<Utf8> text, Pointer<Utf8> toPeerID);
-typedef _SendDart = void Function(int handle, Pointer<Utf8> text, Pointer<Utf8> toPeerID);
+typedef _SendC = Void Function(
+    Int32 handle, Pointer<Utf8> text, Pointer<Utf8> toPeerID);
+typedef _SendDart = void Function(
+    int handle, Pointer<Utf8> text, Pointer<Utf8> toPeerID);
 
-typedef _SendGroupC = Void Function(Int32 handle, Pointer<Utf8> text, Pointer<Utf8> groupID);
-typedef _SendGroupDart = void Function(int handle, Pointer<Utf8> text, Pointer<Utf8> groupID);
+typedef _SendGroupC = Void Function(
+    Int32 handle, Pointer<Utf8> text, Pointer<Utf8> groupID);
+typedef _SendGroupDart = void Function(
+    int handle, Pointer<Utf8> text, Pointer<Utf8> groupID);
 
-typedef _SendFileC = Pointer<Utf8> Function(Int32 handle, Pointer<Utf8> peerID, Pointer<Utf8> filePath);
-typedef _SendFileDart = Pointer<Utf8> Function(int handle, Pointer<Utf8> peerID, Pointer<Utf8> filePath);
+typedef _SendFileC = Pointer<Utf8> Function(
+    Int32 handle, Pointer<Utf8> peerID, Pointer<Utf8> filePath);
+typedef _SendFileDart = Pointer<Utf8> Function(
+    int handle, Pointer<Utf8> peerID, Pointer<Utf8> filePath);
 
-typedef _SendFileToGroupC = Pointer<Utf8> Function(Int32 handle, Pointer<Utf8> groupID, Pointer<Utf8> filePath);
-typedef _SendFileToGroupDart = Pointer<Utf8> Function(int handle, Pointer<Utf8> groupID, Pointer<Utf8> filePath);
+typedef _SendFileToGroupC = Pointer<Utf8> Function(
+    Int32 handle, Pointer<Utf8> groupID, Pointer<Utf8> filePath);
+typedef _SendFileToGroupDart = Pointer<Utf8> Function(
+    int handle, Pointer<Utf8> groupID, Pointer<Utf8> filePath);
 
-typedef _CreateGroupC = Pointer<Utf8> Function(Int32 handle, Pointer<Utf8> name);
-typedef _CreateGroupDart = Pointer<Utf8> Function(int handle, Pointer<Utf8> name);
+typedef _SendVoiceC = Pointer<Utf8> Function(Int32 handle, Pointer<Utf8> peerID,
+    Pointer<Utf8> filePath, Int32 durationSec);
+typedef _SendVoiceDart = Pointer<Utf8> Function(
+    int handle, Pointer<Utf8> peerID, Pointer<Utf8> filePath, int durationSec);
 
-typedef _InviteToGroupC = Void Function(Int32 handle, Pointer<Utf8> groupID, Pointer<Utf8> peerID);
-typedef _InviteToGroupDart = void Function(int handle, Pointer<Utf8> groupID, Pointer<Utf8> peerID);
+typedef _SendVoiceToGroupC = Pointer<Utf8> Function(Int32 handle,
+    Pointer<Utf8> groupID, Pointer<Utf8> filePath, Int32 durationSec);
+typedef _SendVoiceToGroupDart = Pointer<Utf8> Function(
+    int handle, Pointer<Utf8> groupID, Pointer<Utf8> filePath, int durationSec);
+
+typedef _CreateGroupC = Pointer<Utf8> Function(
+    Int32 handle, Pointer<Utf8> name);
+typedef _CreateGroupDart = Pointer<Utf8> Function(
+    int handle, Pointer<Utf8> name);
+
+typedef _InviteToGroupC = Void Function(
+    Int32 handle, Pointer<Utf8> groupID, Pointer<Utf8> peerID);
+typedef _InviteToGroupDart = void Function(
+    int handle, Pointer<Utf8> groupID, Pointer<Utf8> peerID);
 
 typedef _LeaveGroupC = Void Function(Int32 handle, Pointer<Utf8> groupID);
 typedef _LeaveGroupDart = void Function(int handle, Pointer<Utf8> groupID);
@@ -50,28 +73,26 @@ typedef _ListGroupsC = Pointer<Utf8> Function(Int32 handle);
 typedef _ListGroupsDart = Pointer<Utf8> Function(int handle);
 
 typedef EventCallbackC = Void Function(Pointer<Utf8> eventJSON);
-typedef _SetEventCallbackC = Void Function(Int32 handle, Pointer<NativeFunction<EventCallbackC>> cb);
-typedef _SetEventCallbackDart = void Function(int handle, Pointer<NativeFunction<EventCallbackC>> cb);
+typedef _SetEventCallbackC = Void Function(
+    Int32 handle, Pointer<NativeFunction<EventCallbackC>> cb);
+typedef _SetEventCallbackDart = void Function(
+    int handle, Pointer<NativeFunction<EventCallbackC>> cb);
 
 typedef _SetDownloadsDirC = Void Function(Int32 handle, Pointer<Utf8> dir);
 typedef _SetDownloadsDirDart = void Function(int handle, Pointer<Utf8> dir);
 
-typedef _SendCallSignalC = Pointer<Utf8> Function(
-    Int32 handle,
-    Pointer<Utf8> toPeerID,
-    Pointer<Utf8> signalType,
-    Pointer<Utf8> payload);
-typedef _SendCallSignalDart = Pointer<Utf8> Function(
-    int handle,
-    Pointer<Utf8> toPeerID,
-    Pointer<Utf8> signalType,
-    Pointer<Utf8> payload);
+typedef _SendCallSignalC = Pointer<Utf8> Function(Int32 handle,
+    Pointer<Utf8> toPeerID, Pointer<Utf8> signalType, Pointer<Utf8> payload);
+typedef _SendCallSignalDart = Pointer<Utf8> Function(int handle,
+    Pointer<Utf8> toPeerID, Pointer<Utf8> signalType, Pointer<Utf8> payload);
 
 typedef _LocalIPsC = Pointer<Utf8> Function(Int32 handle);
 typedef _LocalIPsDart = Pointer<Utf8> Function(int handle);
 
-typedef _GetPeerIPC = Pointer<Utf8> Function(Int32 handle, Pointer<Utf8> peerID);
-typedef _GetPeerIPDart = Pointer<Utf8> Function(int handle, Pointer<Utf8> peerID);
+typedef _GetPeerIPC = Pointer<Utf8> Function(
+    Int32 handle, Pointer<Utf8> peerID);
+typedef _GetPeerIPDart = Pointer<Utf8> Function(
+    int handle, Pointer<Utf8> peerID);
 
 typedef _GetTURNPortC = Int32 Function(Int32 handle);
 typedef _GetTURNPortDart = int Function(int handle);
@@ -97,6 +118,8 @@ class PiperBindings {
   late final _SendGroupDart sendGroup;
   late final _SendFileDart sendFile;
   late final _SendFileToGroupDart sendFileToGroup;
+  late final _SendVoiceDart sendVoice;
+  late final _SendVoiceToGroupDart sendVoiceToGroup;
   late final _CreateGroupDart createGroup;
   late final _InviteToGroupDart inviteToGroup;
   late final _LeaveGroupDart leaveGroup;
@@ -116,54 +139,56 @@ class PiperBindings {
   PiperBindings({String? libraryPath}) {
     _lib = DynamicLibrary.open(libraryPath ?? _defaultLibPath());
 
-    createNode = _lib
-        .lookupFunction<_CreateNodeC, _CreateNodeDart>('PiperCreateNode');
-    startNode = _lib
-        .lookupFunction<_StartNodeC, _StartNodeDart>('PiperStartNode');
-    stopNode = _lib
-        .lookupFunction<_StopNodeC, _StopNodeDart>('PiperStopNode');
-    nodeID = _lib
-        .lookupFunction<_NodeIDC, _NodeIDDart>('PiperNodeID');
-    nodeName = _lib
-        .lookupFunction<_NodeNameC, _NodeNameDart>('PiperNodeName');
-    send = _lib
-        .lookupFunction<_SendC, _SendDart>('PiperSend');
-    sendGroup = _lib
-        .lookupFunction<_SendGroupC, _SendGroupDart>('PiperSendGroup');
-    sendFile = _lib
-        .lookupFunction<_SendFileC, _SendFileDart>('PiperSendFile');
-    sendFileToGroup = _lib
-        .lookupFunction<_SendFileToGroupC, _SendFileToGroupDart>('PiperSendFileToGroup');
+    createNode =
+        _lib.lookupFunction<_CreateNodeC, _CreateNodeDart>('PiperCreateNode');
+    startNode =
+        _lib.lookupFunction<_StartNodeC, _StartNodeDart>('PiperStartNode');
+    stopNode = _lib.lookupFunction<_StopNodeC, _StopNodeDart>('PiperStopNode');
+    nodeID = _lib.lookupFunction<_NodeIDC, _NodeIDDart>('PiperNodeID');
+    nodeName = _lib.lookupFunction<_NodeNameC, _NodeNameDart>('PiperNodeName');
+    send = _lib.lookupFunction<_SendC, _SendDart>('PiperSend');
+    sendGroup =
+        _lib.lookupFunction<_SendGroupC, _SendGroupDart>('PiperSendGroup');
+    sendFile = _lib.lookupFunction<_SendFileC, _SendFileDart>('PiperSendFile');
+    sendFileToGroup =
+        _lib.lookupFunction<_SendFileToGroupC, _SendFileToGroupDart>(
+            'PiperSendFileToGroup');
+    sendVoice =
+        _lib.lookupFunction<_SendVoiceC, _SendVoiceDart>('PiperSendVoice');
+    sendVoiceToGroup =
+        _lib.lookupFunction<_SendVoiceToGroupC, _SendVoiceToGroupDart>(
+            'PiperSendVoiceToGroup');
     createGroup = _lib
         .lookupFunction<_CreateGroupC, _CreateGroupDart>('PiperCreateGroup');
-    inviteToGroup = _lib
-        .lookupFunction<_InviteToGroupC, _InviteToGroupDart>('PiperInviteToGroup');
-    leaveGroup = _lib
-        .lookupFunction<_LeaveGroupC, _LeaveGroupDart>('PiperLeaveGroup');
-    listPeers = _lib
-        .lookupFunction<_ListPeersC, _ListPeersDart>('PiperListPeers');
-    listGroups = _lib
-        .lookupFunction<_ListGroupsC, _ListGroupsDart>('PiperListGroups');
-    setEventCallback = _lib
-        .lookupFunction<_SetEventCallbackC, _SetEventCallbackDart>('PiperSetEventCallback');
-    setDownloadsDir = _lib
-        .lookupFunction<_SetDownloadsDirC, _SetDownloadsDirDart>('PiperSetDownloadsDir');
+    inviteToGroup = _lib.lookupFunction<_InviteToGroupC, _InviteToGroupDart>(
+        'PiperInviteToGroup');
+    leaveGroup =
+        _lib.lookupFunction<_LeaveGroupC, _LeaveGroupDart>('PiperLeaveGroup');
+    listPeers =
+        _lib.lookupFunction<_ListPeersC, _ListPeersDart>('PiperListPeers');
+    listGroups =
+        _lib.lookupFunction<_ListGroupsC, _ListGroupsDart>('PiperListGroups');
+    setEventCallback =
+        _lib.lookupFunction<_SetEventCallbackC, _SetEventCallbackDart>(
+            'PiperSetEventCallback');
+    setDownloadsDir =
+        _lib.lookupFunction<_SetDownloadsDirC, _SetDownloadsDirDart>(
+            'PiperSetDownloadsDir');
     setNodeName = _lib
         .lookupFunction<_SetNodeNameC, _SetNodeNameDart>('PiperSetNodeName');
-    sendCallSignal = _lib
-        .lookupFunction<_SendCallSignalC, _SendCallSignalDart>('PiperSendCallSignal');
-    localIPs = _lib
-        .lookupFunction<_LocalIPsC, _LocalIPsDart>('PiperLocalIPs');
-    getPeerIP = _lib
-        .lookupFunction<_GetPeerIPC, _GetPeerIPDart>('PiperGetPeerIP');
+    sendCallSignal = _lib.lookupFunction<_SendCallSignalC, _SendCallSignalDart>(
+        'PiperSendCallSignal');
+    localIPs = _lib.lookupFunction<_LocalIPsC, _LocalIPsDart>('PiperLocalIPs');
+    getPeerIP =
+        _lib.lookupFunction<_GetPeerIPC, _GetPeerIPDart>('PiperGetPeerIP');
     getTURNPort = _lib
         .lookupFunction<_GetTURNPortC, _GetTURNPortDart>('PiperGetTURNPort');
     getTopology = _lib
         .lookupFunction<_GetTopologyC, _GetTopologyDart>('PiperGetTopology');
-    getRouteTable = _lib
-        .lookupFunction<_GetRouteTableC, _GetRouteTableDart>('PiperGetRouteTable');
-    freeString = _lib
-        .lookupFunction<_FreeStringC, _FreeStringDart>('PiperFreeString');
+    getRouteTable = _lib.lookupFunction<_GetRouteTableC, _GetRouteTableDart>(
+        'PiperGetRouteTable');
+    freeString =
+        _lib.lookupFunction<_FreeStringC, _FreeStringDart>('PiperFreeString');
   }
 
   static String _defaultLibPath() {

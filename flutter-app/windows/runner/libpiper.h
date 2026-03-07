@@ -98,6 +98,8 @@ extern void PiperSend(int handle, char* text, char* toPeerID);
 extern void PiperSendGroup(int handle, char* text, char* groupID);
 extern char* PiperSendFile(int handle, char* peerID, char* filePath);
 extern char* PiperSendFileToGroup(int handle, char* groupID, char* filePath);
+extern char* PiperSendVoice(int handle, char* peerID, char* filePath, int durationSec);
+extern char* PiperSendVoiceToGroup(int handle, char* groupID, char* filePath, int durationSec);
 extern char* PiperSendCallSignal(int handle, char* toPeerID, char* signalType, char* payload);
 extern char* PiperCreateGroup(int handle, char* name);
 extern void PiperInviteToGroup(int handle, char* groupID, char* peerID);
