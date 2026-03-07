@@ -106,6 +106,9 @@ extern char* PiperListPeers(int handle);
 extern char* PiperListGroups(int handle);
 extern void PiperSetEventCallback(int handle, EventCallback cb);
 extern void PiperSetDownloadsDir(int handle, char* dir);
+extern char* PiperGetPeerTable(int handle);
+extern char* PiperGetLocalInfo(int handle);
+extern void PiperInjectPeers(int handle, char* recordsJSON);
 extern void PiperFreeString(char* s);
 
 #ifdef __cplusplus

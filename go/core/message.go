@@ -37,6 +37,10 @@ const (
 	// DHT peer exchange
 	MsgTypePeerExchange MsgType = "peer_exchange" // carries known peers for cross-peer discovery
 
+	// Mesh relay: wraps any message for forwarding through an intermediary node.
+	// Used when sender has no direct TCP path to the final recipient.
+	MsgTypeRelay MsgType = "relay"
+
 	// Call signaling message types (payload = encrypted JSON in Content field)
 	MsgTypeCallOffer  MsgType = "call_offer"  // caller → callee: {"sdp":"...","is_video":true}
 	MsgTypeCallAnswer MsgType = "call_answer" // callee → caller: {"sdp":"..."}
@@ -82,6 +86,11 @@ type Message struct {
 
 	// DHT peer exchange
 	PeerRecords []PeerRecord `json:"peer_records,omitempty"` // known peers (peer_exchange only)
+
+	// Relay fields (MsgTypeRelay only)
+	// To holds the final destination peer ID (reusing the existing To field).
+	// RelayPayload holds the JSON-encoded inner Message to be delivered.
+	RelayPayload string `json:"relay_payload,omitempty"`
 
 	Timestamp time.Time `json:"ts"`
 }

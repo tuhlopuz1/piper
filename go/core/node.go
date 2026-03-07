@@ -58,6 +58,14 @@ type Node struct {
 	connByPeerID map[string]*conn
 	discovered   map[string]peerEndpoint
 	connGen      map[string]uint64
+	// introducer[peerID] = connectedPeerID who told us about peerID via
+	// peer_exchange. Used to find a relay path when direct TCP fails.
+	introducer map[string]string
+
+	// seenMsgs deduplicates flooded broadcast messages (by message ID).
+	// Prevents loops when the same message arrives via multiple relay hops.
+	seenMu   sync.Mutex
+	seenMsgs map[string]time.Time
 
 	eventCh chan Event
 	ctx     context.Context
@@ -115,6 +123,8 @@ func NewNodeWithID(name, id string) *Node {
 		connByPeerID: make(map[string]*conn),
 		discovered:   make(map[string]peerEndpoint),
 		connGen:      make(map[string]uint64),
+		introducer:   make(map[string]string),
+		seenMsgs:     make(map[string]time.Time),
 		eventCh:      make(chan Event, 512),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -554,6 +564,16 @@ func (n *Node) pingLoop() {
 		case <-n.ctx.Done():
 			return
 		case <-ticker.C:
+			// Prune stale seen-message entries to prevent unbounded growth.
+			cutoff := time.Now().Add(-2 * time.Minute)
+			n.seenMu.Lock()
+			for id, t := range n.seenMsgs {
+				if t.Before(cutoff) {
+					delete(n.seenMsgs, id)
+				}
+			}
+			n.seenMu.Unlock()
+
 			n.mu.Lock()
 			conns := make([]*conn, 0, len(n.connByPeerID))
 			for _, c := range n.connByPeerID {
@@ -593,6 +613,7 @@ func (n *Node) Stop() {
 func (n *Node) Send(text string, toPeerID string) {
 	if toPeerID == "" {
 		msg := NewTextMessage(n.id, n.name, text)
+		n.markSeen(msg.ID) // prevent re-flooding our own message
 		n.emit(Event{Msg: &msg}) // echo own message to UI
 		n.broadcast(msg, "")
 	} else {
@@ -698,12 +719,13 @@ func (n *Node) sendDirect(text, toPeerID string) {
 	}
 	n.emit(Event{Msg: &echo})
 
-	// Send encrypted wire message.
+	// Send encrypted wire message — fall back to relay if no direct connection.
 	n.mu.Lock()
 	cn := n.connByPeerID[toPeerID]
 	n.mu.Unlock()
 	if cn == nil {
-		log.Printf("[node] sendDirect: no connection to %s", toPeerID[:8])
+		log.Printf("[node] sendDirect: no direct conn to %s, trying relay", toPeerID[:8])
+		n.relayMessage(wireMsg, toPeerID)
 		return
 	}
 	if err := cn.send(wireMsg); err != nil {
@@ -854,8 +876,16 @@ func (n *Node) readLoop(cn *conn) {
 
 		switch msg.Type {
 		case MsgTypeText:
+			// markSeen returns false if we already processed this message ID,
+			// which means it's a flood loop — drop it silently.
+			if !n.markSeen(msg.ID) {
+				continue
+			}
 			n.maybeUpdatePeerName(msg.PeerID, msg.Name)
 			n.emit(Event{Msg: &msg})
+			// Flood to all other connected peers so the message propagates
+			// across subnets via intermediate nodes (mesh gossip).
+			n.broadcast(msg, cn.peerID)
 
 		case MsgTypeDirect:
 			if msg.To != n.id {
@@ -917,6 +947,9 @@ func (n *Node) readLoop(cn *conn) {
 			}
 			msg.Content = plaintext
 			n.emit(Event{Msg: &msg})
+
+		case MsgTypeRelay:
+			n.handleRelay(msg)
 
 		case MsgTypePeerExchange:
 			n.handlePeerExchange(msg)
@@ -1275,6 +1308,14 @@ func (n *Node) handlePeerExchange(msg Message) {
 		if rec.ID == n.id || rec.ID == "" {
 			continue
 		}
+		// Remember who introduced this peer so we can relay through them
+		// if a direct TCP connection is not possible (different subnet).
+		n.mu.Lock()
+		if _, known := n.introducer[rec.ID]; !known {
+			n.introducer[rec.ID] = msg.PeerID
+		}
+		n.mu.Unlock()
+
 		ip := net.ParseIP(rec.IP)
 		if ip == nil || rec.Port <= 0 {
 			continue
@@ -1363,6 +1404,134 @@ func (n *Node) PeerTable() []PeerRecord {
 		})
 	}
 	return out
+}
+
+// ─── Flood dedup ──────────────────────────────────────────────────────────────
+
+// markSeen records msgID as seen and returns true if this is the first time.
+// Returns false (skip) if the message was already processed — used to break
+// flood loops when the same broadcast arrives via multiple relay paths.
+func (n *Node) markSeen(msgID string) bool {
+	n.seenMu.Lock()
+	defer n.seenMu.Unlock()
+	if _, exists := n.seenMsgs[msgID]; exists {
+		return false
+	}
+	n.seenMsgs[msgID] = time.Now()
+	return true
+}
+
+// ─── Relay ────────────────────────────────────────────────────────────────────
+
+// relayMessage wraps inner in a MsgTypeRelay envelope and forwards it through
+// the peer who introduced us to the target (the "introducer"). Used when there
+// is no direct TCP connection to targetID (e.g., different subnet).
+func (n *Node) relayMessage(inner Message, targetID string) {
+	n.mu.Lock()
+	introducerID := n.introducer[targetID]
+	cn := n.connByPeerID[introducerID]
+	n.mu.Unlock()
+
+	if introducerID == "" || cn == nil {
+		log.Printf("[relay] no relay path to %s (introducer=%q connected=%v)",
+			targetID[:8], introducerID, cn != nil)
+		return
+	}
+
+	payload, err := json.Marshal(inner)
+	if err != nil {
+		log.Printf("[relay] marshal inner: %v", err)
+		return
+	}
+
+	relay := Message{
+		ID:           uuid.NewString(),
+		Type:         MsgTypeRelay,
+		PeerID:       n.id,
+		To:           targetID, // final destination
+		RelayPayload: string(payload),
+		Timestamp:    time.Now(),
+	}
+	if err := cn.send(relay); err != nil {
+		log.Printf("[relay] send to %s via %s: %v", targetID[:8], introducerID[:8], err)
+	} else {
+		log.Printf("[relay] forwarded to %s via %s", targetID[:8], introducerID[:8])
+	}
+}
+
+// handleRelay processes an incoming MsgTypeRelay message.
+// If we are the final destination (msg.To == n.id), we decode and handle the
+// inner message as if it arrived directly. Otherwise we forward it one hop
+// closer to the destination using our own connections.
+func (n *Node) handleRelay(msg Message) {
+	if msg.RelayPayload == "" {
+		return
+	}
+
+	if msg.To == n.id {
+		// We are the final destination — decode and handle the inner message.
+		var inner Message
+		if err := json.Unmarshal([]byte(msg.RelayPayload), &inner); err != nil {
+			log.Printf("[relay] unmarshal inner: %v", err)
+			return
+		}
+		log.Printf("[relay] delivered %s from %s via relay", inner.Type, inner.PeerID[:8])
+		// Re-inject into the normal message processing path.
+		// We use the sender of the outer relay as the "connection" context,
+		// so we don't need a direct conn to the original sender.
+		n.dispatchMessage(inner)
+		return
+	}
+
+	// Forward one hop toward the destination.
+	n.mu.Lock()
+	cn := n.connByPeerID[msg.To]
+	n.mu.Unlock()
+	if cn == nil {
+		log.Printf("[relay] cannot forward to %s: not connected", msg.To[:8])
+		return
+	}
+	if err := cn.send(msg); err != nil {
+		log.Printf("[relay] forward to %s: %v", msg.To[:8], err)
+	}
+}
+
+// dispatchMessage handles an already-decoded Message that arrived via relay.
+// It mirrors the relevant cases from readLoop without needing a live *conn.
+func (n *Node) dispatchMessage(msg Message) {
+	switch msg.Type {
+	case MsgTypeText:
+		if !n.markSeen(msg.ID) {
+			return
+		}
+		n.maybeUpdatePeerName(msg.PeerID, msg.Name)
+		n.emit(Event{Msg: &msg})
+		// Do NOT re-flood relayed text — the originating hop already flooded it.
+
+	case MsgTypeDirect:
+		if msg.To != n.id {
+			return
+		}
+		peer := n.peers.Get(msg.PeerID)
+		if peer == nil || isZeroKey(peer.SharedKey) {
+			log.Printf("[relay] direct from unknown/no-key peer %s", msg.PeerID[:8])
+			return
+		}
+		plaintext, err := Decrypt(peer.SharedKey, msg.Nonce, msg.Content)
+		if err != nil {
+			log.Printf("[relay] decrypt from %s: %v", msg.PeerID[:8], err)
+			return
+		}
+		msg.Content = plaintext
+		n.maybeUpdatePeerName(msg.PeerID, msg.Name)
+		n.emit(Event{Msg: &msg})
+
+	case MsgTypeGroupText:
+		n.handleGroupText(msg)
+
+	default:
+		log.Printf("[relay] unsupported relayed type %s from %s", msg.Type, msg.PeerID[:8])
+	}
 }
 
 // isZeroKey reports whether a [32]byte key is all zeros (i.e. not yet set).
