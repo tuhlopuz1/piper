@@ -28,5 +28,9 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Piper uses the microphone to record voice messages.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Piper uses Bluetooth to discover nearby peers on the local network.</string>
 </dict>
 </plist>
