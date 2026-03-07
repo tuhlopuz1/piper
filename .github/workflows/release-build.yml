@@ -34,9 +34,10 @@ jobs:
         run: flutter pub get
 
       - name: Build Linux release
+        working-directory: flutter-app
         run: |
           flutter config --enable-linux-desktop
-          flutter build linux --release --project-dir flutter-app
+          flutter build linux --release
 
       - name: Build libpiper.so for Linux bundle
         run: |
@@ -80,9 +81,10 @@ jobs:
         run: flutter pub get
 
       - name: Build macOS release
+        working-directory: flutter-app
         run: |
           flutter config --enable-macos-desktop
-          flutter build macos --release --project-dir flutter-app
+          flutter build macos --release
 
       - name: Build libpiper.dylib for app bundle
         run: |
@@ -147,10 +149,11 @@ jobs:
           go build -buildmode=c-shared -o ..\flutter-app\windows\runner\libpiper.dll .\ffi\
 
       - name: Build Windows release
+        working-directory: flutter-app
         shell: pwsh
         run: |
           flutter config --enable-windows-desktop
-          flutter build windows --release --project-dir flutter-app
+          flutter build windows --release
 
       - name: Package Windows artifact
         shell: pwsh
@@ -208,7 +211,8 @@ jobs:
           ./go/build_android.sh
 
       - name: Build Android release APK
-        run: flutter build apk --release --project-dir flutter-app
+        working-directory: flutter-app
+        run: flutter build apk --release
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
