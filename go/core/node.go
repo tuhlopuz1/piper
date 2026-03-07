@@ -67,6 +67,10 @@ type Node struct {
 	seenMu   sync.Mutex
 	seenMsgs map[string]time.Time
 
+	// spamLimiters enforces per-peer message rate limits to prevent flood attacks.
+	spamMu       sync.Mutex
+	spamLimiters map[string]*spamBucket
+
 	eventCh chan Event
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -125,6 +129,7 @@ func NewNodeWithID(name, id string) *Node {
 		connGen:      make(map[string]uint64),
 		introducer:   make(map[string]string),
 		seenMsgs:     make(map[string]time.Time),
+		spamLimiters: make(map[string]*spamBucket),
 		eventCh:      make(chan Event, 512),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -471,6 +476,7 @@ func (n *Node) streamFileChunks(t *Transfer, key [32]byte, cn *conn) {
 	for {
 		nr, readErr := t.file.Read(buf)
 		if nr > 0 {
+			chunkStart := time.Now()
 			chunk := buf[:nr]
 			h.Write(chunk)
 
@@ -502,6 +508,13 @@ func (n *Node) streamFileChunks(t *Transfer, key [32]byte, cn *conn) {
 			seq++
 			n.transfers.UpdateProgress(t.ID, t.Progress+int64(nr))
 			n.emit(Event{Transfer: &TransferEvent{Transfer: t, Kind: TransferProgress}})
+
+			// Throttle to FileTransferMaxBPS so file transfer does not starve
+			// real-time traffic (calls, messages) on the shared TCP connection.
+			minDur := time.Duration(int64(nr) * int64(time.Second) / FileTransferMaxBPS)
+			if elapsed := time.Since(chunkStart); elapsed < minDur {
+				time.Sleep(minDur - elapsed)
+			}
 		}
 		if readErr == io.EOF {
 			break
@@ -694,6 +707,35 @@ func (n *Node) SendCallSignal(toPeerID, signalType, payload string) error {
 		return nil
 	}
 	return fmt.Errorf("send call signal: no connection to peer %s", toPeerID[:8])
+}
+
+// sendCallAckFor sends a CallAck back to the originating peer on the same conn.
+// It is called from the readLoop goroutine whenever a critical call signal is
+// received, giving the sender application-level delivery confirmation.
+func (n *Node) sendCallAckFor(cn *conn, orig Message, key [32]byte) {
+	callID, seq := parseCallMeta(orig.Content)
+	if callID == "" {
+		return
+	}
+	payload := fmt.Sprintf(`{"call_id":%q,"ack_seq":%d,"ack_type":%q}`, callID, seq, string(orig.Type))
+	nonce, ct, err := Encrypt(key, payload)
+	if err != nil {
+		log.Printf("[node] sendCallAckFor encrypt: %v", err)
+		return
+	}
+	ack := Message{
+		ID:        uuid.NewString(),
+		Type:      MsgTypeCallAck,
+		PeerID:    n.id,
+		Name:      n.name,
+		Content:   ct,
+		Nonce:     nonce,
+		To:        orig.PeerID,
+		Timestamp: time.Now(),
+	}
+	if err := cn.send(ack); err != nil {
+		log.Printf("[node] sendCallAckFor send: %v", err)
+	}
 }
 
 // sendDirect encrypts text and unicasts it to the specified peer.
@@ -890,6 +932,11 @@ func (n *Node) readLoop(cn *conn) {
 			if !n.markSeen(msg.ID) {
 				continue
 			}
+			// Drop messages from peers that exceed the per-peer rate limit.
+			if !n.allowFromPeer(msg.PeerID) {
+				log.Printf("[spam] rate limit exceeded from peer %s — dropping", msg.PeerID[:8])
+				continue
+			}
 			n.maybeUpdatePeerName(msg.PeerID, msg.Name)
 			n.emit(Event{Msg: &msg})
 			// Flood to all other connected peers so the message propagates
@@ -912,6 +959,11 @@ func (n *Node) readLoop(cn *conn) {
 				continue
 			}
 			msg.Content = plaintext // replace ciphertext with plaintext before emitting
+			// Drop direct messages from peers exceeding the rate limit.
+			if !n.allowFromPeer(msg.PeerID) {
+				log.Printf("[spam] rate limit exceeded from peer %s — dropping direct msg", msg.PeerID[:8])
+				continue
+			}
 			n.maybeUpdatePeerName(msg.PeerID, msg.Name)
 			n.emit(Event{Msg: &msg})
 
@@ -955,6 +1007,13 @@ func (n *Node) readLoop(cn *conn) {
 				continue
 			}
 			msg.Content = plaintext
+			// Auto-ACK critical signals so the sender gets delivery confirmation
+			// without waiting for the application layer to respond.
+			// CallAck and CallIce are excluded: ACK of ACK causes infinite loop;
+			// ICE candidates are fire-and-forget (WebRTC handles retransmission).
+			if msg.Type != MsgTypeCallAck && msg.Type != MsgTypeCallIce {
+				go n.sendCallAckFor(cn, msg, peer.SharedKey)
+			}
 			n.emit(Event{Msg: &msg})
 
 		case MsgTypeRelay:

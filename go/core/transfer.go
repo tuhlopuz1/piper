@@ -11,6 +11,12 @@ const (
 	// ChunkSize is the raw chunk size before encryption (512 KB).
 	ChunkSize = 512 * 1024
 
+	// FileTransferMaxBPS is the maximum outgoing file-transfer throughput in
+	// bytes per second. Throttling prevents a single file transfer from
+	// saturating the link and starving other traffic (calls, messages).
+	// 5 MB/s ≈ 40 Mbit/s — well within typical WiFi/LAN capacity.
+	FileTransferMaxBPS int64 = 5 * 1024 * 1024
+
 	// FileDownloadDir is the default directory for received files.
 	FileDownloadDir = "piper-files"
 )

@@ -29,7 +29,7 @@ dependencies:
   # Open files with native app
   open_file: ^3.3.2
   # Record voice messages
-  record: ^5.2.0
+  record: ^6.2.0
   # Play voice messages
   audioplayers: ^6.1.0
   # WebRTC audio/video calls
@@ -52,6 +52,7 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.3
+
 
 flutter_launcher_icons:
   android: "launcher_icon"

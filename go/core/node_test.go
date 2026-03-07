@@ -424,3 +424,86 @@ func waitForDirectMsg(t *testing.T, receiver *Node, expectedContent string, time
 		}
 	}
 }
+
+// TestThreeNodes_RelayFailover verifies that:
+//  1. Broadcasts relay correctly through an intermediate node (A → B → C).
+//  2. After the relay node B is stopped, A and C can reconnect directly and
+//     continue communicating without the relay.
+func TestThreeNodes_RelayFailover(t *testing.T) {
+	nodeA := NewNode("Alice")
+	nodeB := NewNode("Bob") // relay — stopped mid-test
+	nodeC := NewNode("Carol")
+
+	for _, n := range []*Node{nodeA, nodeB, nodeC} {
+		if err := n.Start(); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+	}
+	defer nodeA.Stop()
+	// nodeB is stopped manually in Phase 3; no defer.
+	defer nodeC.Stop()
+
+	epA := nodeA.LocalEndpoint()
+	epB := nodeB.LocalEndpoint()
+	epC := nodeC.LocalEndpoint()
+
+	// Phase 1 — chain topology: A ↔ B ↔ C
+	// A and C know only B; they are not directly connected.
+	nodeA.InjectPeers([]PeerRecord{epB})
+	nodeB.InjectPeers([]PeerRecord{epA, epC})
+	nodeC.InjectPeers([]PeerRecord{epB})
+
+	waitPeers(t, nodeA, nodeB, 5*time.Second)
+	waitPeers(t, nodeB, nodeC, 5*time.Second)
+
+	// Phase 2 — broadcast from A reaches C via relay through B.
+	nodeA.Send("relay-hello", "")
+
+	gotRelay := false
+	deadline := time.After(5 * time.Second)
+relayLoop:
+	for {
+		select {
+		case e := <-nodeC.Events():
+			if e.Msg != nil && e.Msg.Type == MsgTypeText && e.Msg.Content == "relay-hello" {
+				gotRelay = true
+				break relayLoop
+			}
+		case <-deadline:
+			break relayLoop
+		}
+	}
+	if !gotRelay {
+		t.Fatal("relay: nodeC did not receive broadcast relayed through nodeB")
+	}
+
+	// Phase 3 — kill the relay node.
+	nodeB.Stop()
+	time.Sleep(300 * time.Millisecond)
+
+	// Phase 4 — A and C discover each other directly.
+	nodeA.InjectPeers([]PeerRecord{epC})
+	nodeC.InjectPeers([]PeerRecord{epA})
+	waitPeers(t, nodeA, nodeC, 5*time.Second)
+
+	// Phase 5 — communication restored without relay.
+	nodeA.Send("direct-hello", "")
+
+	gotDirect := false
+	deadline2 := time.After(5 * time.Second)
+directLoop:
+	for {
+		select {
+		case e := <-nodeC.Events():
+			if e.Msg != nil && e.Msg.Type == MsgTypeText && e.Msg.Content == "direct-hello" {
+				gotDirect = true
+				break directLoop
+			}
+		case <-deadline2:
+			break directLoop
+		}
+	}
+	if !gotDirect {
+		t.Fatal("failover: nodeC did not receive broadcast after relay nodeB was stopped")
+	}
+}
