@@ -332,6 +332,23 @@ func PiperSetDownloadsDir(handle C.int, dir *C.char) {
 	e.node.SetDownloadsDir(C.GoString(dir))
 }
 
+// ─── DHT ─────────────────────────────────────────────────────────────────────
+
+// PiperGetPeerTable returns the full DHT peer table as a JSON array of
+// {id, name, ip, port} objects. Use this to seed BLE / WiFi Direct payloads
+// for cross-subnet mesh bootstrap.
+//
+//export PiperGetPeerTable
+func PiperGetPeerTable(handle C.int) *C.char {
+	e := getEntry(handle)
+	if e == nil {
+		return C.CString("[]")
+	}
+	records := e.node.PeerTable()
+	data, _ := json.Marshal(records)
+	return C.CString(string(data))
+}
+
 // ─── Memory management ──────────────────────────────────────────────────────
 
 //export PiperFreeString

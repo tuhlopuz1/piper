@@ -828,6 +828,9 @@ func (n *Node) completeHandshake(cn *conn, name string, theirPubKey []byte, addr
 	}
 
 	n.emit(Event{Peer: &PeerEvent{Peer: info, Kind: PeerJoined}})
+
+	// Kick off peer-exchange so new peer learns about everyone we know.
+	go n.sendPeerExchange(cn)
 }
 
 // ─── read loop ────────────────────────────────────────────────────────────────
@@ -914,6 +917,9 @@ func (n *Node) readLoop(cn *conn) {
 			}
 			msg.Content = plaintext
 			n.emit(Event{Msg: &msg})
+
+		case MsgTypePeerExchange:
+			n.handlePeerExchange(msg)
 
 		case MsgTypePing:
 			cn.send(Message{Type: MsgTypePong, PeerID: n.id, Timestamp: time.Now()})
@@ -1216,6 +1222,92 @@ func (n *Node) fastRedial(peerID string) {
 		peerName = p.Name
 	}
 	go n.dialPeer(peerID, peerName, ep.ip, ep.port)
+}
+
+// ─── DHT / peer exchange ──────────────────────────────────────────────────────
+
+// sendPeerExchange sends our full known-peer table to cn so it can discover
+// peers it hasn't seen yet. Called in a goroutine right after every handshake.
+func (n *Node) sendPeerExchange(cn *conn) {
+	n.mu.Lock()
+	records := make([]PeerRecord, 0, len(n.discovered))
+	for id, ep := range n.discovered {
+		if id == cn.peerID || ep.ip == nil || ep.port <= 0 {
+			continue // skip the recipient and empty entries
+		}
+		name := id
+		if p := n.peers.Get(id); p != nil && p.Name != "" {
+			name = p.Name
+		}
+		records = append(records, PeerRecord{
+			ID:   id,
+			Name: name,
+			IP:   ep.ip.String(),
+			Port: ep.port,
+		})
+	}
+	n.mu.Unlock()
+
+	if len(records) == 0 {
+		return
+	}
+
+	msg := Message{
+		ID:          uuid.NewString(),
+		Type:        MsgTypePeerExchange,
+		PeerID:      n.id,
+		Name:        n.name,
+		PeerRecords: records,
+		Timestamp:   time.Now(),
+	}
+	if err := cn.send(msg); err != nil {
+		log.Printf("[dht] peer_exchange to %s: %v", cn.peerID[:8], err)
+	} else {
+		log.Printf("[dht] sent %d peer records to %s", len(records), cn.peerID[:8])
+	}
+}
+
+// handlePeerExchange processes an incoming peer_exchange message and dials
+// any peers we haven't seen yet.
+func (n *Node) handlePeerExchange(msg Message) {
+	log.Printf("[dht] received %d peer records from %s", len(msg.PeerRecords), msg.PeerID[:8])
+	for _, rec := range msg.PeerRecords {
+		if rec.ID == n.id || rec.ID == "" {
+			continue
+		}
+		ip := net.ParseIP(rec.IP)
+		if ip == nil || rec.Port <= 0 {
+			continue
+		}
+		// onDiscovered is idempotent — it skips peers already connected.
+		n.onDiscovered(rec.ID, rec.Name, ip, rec.Port)
+	}
+}
+
+// PeerTable returns a snapshot of every peer endpoint this node has ever
+// discovered. This is the DHT table and can be serialised for transmission
+// over out-of-band transports (BLE, WiFi Direct) to bootstrap cross-subnet
+// peer discovery in future mesh networking.
+func (n *Node) PeerTable() []PeerRecord {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make([]PeerRecord, 0, len(n.discovered))
+	for id, ep := range n.discovered {
+		if ep.ip == nil || ep.port <= 0 {
+			continue
+		}
+		name := id
+		if p := n.peers.Get(id); p != nil && p.Name != "" {
+			name = p.Name
+		}
+		out = append(out, PeerRecord{
+			ID:   id,
+			Name: name,
+			IP:   ep.ip.String(),
+			Port: ep.port,
+		})
+	}
+	return out
 }
 
 // isZeroKey reports whether a [32]byte key is all zeros (i.e. not yet set).

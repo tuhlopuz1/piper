@@ -34,6 +34,9 @@ const (
 	MsgTypeFileDone   MsgType = "file_done"   // sender signals all chunks sent (carries hash)
 	MsgTypeFileReject MsgType = "file_reject" // receiver declines
 
+	// DHT peer exchange
+	MsgTypePeerExchange MsgType = "peer_exchange" // carries known peers for cross-peer discovery
+
 	// Call signaling message types (payload = encrypted JSON in Content field)
 	MsgTypeCallOffer  MsgType = "call_offer"  // caller → callee: {"sdp":"...","is_video":true}
 	MsgTypeCallAnswer MsgType = "call_answer" // callee → caller: {"sdp":"..."}
@@ -43,6 +46,16 @@ const (
 	MsgTypeCallBusy   MsgType = "call_busy"   // callee/peer → caller: {"call_id":"...","reason":"busy"}
 	MsgTypeCallAck    MsgType = "call_ack"    // either side: {"call_id":"...","ack_seq":N,"ack_type":"call_end"}
 )
+
+// PeerRecord is one entry in a DHT peer-exchange payload.
+// It is serialised inside Message.PeerRecords and can also be transmitted
+// over out-of-band transports (BLE, WiFi Direct) for cross-subnet bootstrap.
+type PeerRecord struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+	Port int    `json:"port"`
+}
 
 // Message is the top-level protocol envelope exchanged between peers.
 // Wire format: 4-byte big-endian uint32 length prefix + JSON body.
@@ -66,6 +79,9 @@ type Message struct {
 	TransferID string `json:"transfer_id,omitempty"` // unique transfer identifier
 	ChunkSeq   int    `json:"chunk_seq,omitempty"`   // chunk sequence number
 	ChunkData  []byte `json:"chunk_data,omitempty"`  // encrypted chunk data (auto-base64 in JSON)
+
+	// DHT peer exchange
+	PeerRecords []PeerRecord `json:"peer_records,omitempty"` // known peers (peer_exchange only)
 
 	Timestamp time.Time `json:"ts"`
 }
